@@ -3,6 +3,10 @@
 *.pem
 out.json
 
+# The chunked corpus. Held back until the author decides whether the source
+# engineering notes go public. Regenerate with: python ingest/chunker.py
+data/chunks.jsonl
+
 # Python
 __pycache__/
 *.py[cod]

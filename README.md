@@ -147,9 +147,25 @@ psql "$CRDB_URL" -f sql/queries.sql
 ```
 
 The order matters and the comments in `schema.sql` say why. Everything except the time travel query
-also works through the managed MCP server. Embeddings need AWS credentials with
-`bedrock:InvokeModel` in `us-east-1`. Copy `.env.example` to `.env`, which is git ignored. No
-credential belongs in this repository, in a commit, or in a chat window.
+also works through the managed MCP server.
+
+Then the corpus, which needs Bedrock. This runs as is in AWS CloudShell, where the credentials
+already exist:
+
+```bash
+pip install --quiet pg8000            # pure Python, nothing to compile
+python3 ingest/chunker.py             # notes -> data/chunks.jsonl, offline
+python3 ingest/embed_and_load.py --reset
+python3 ingest/embed_and_load.py --search "why did the part get thicker"
+```
+
+`pg8000` rather than `psycopg2` on purpose, so the same file runs in CloudShell, in a Lambda zip
+and on a Windows laptop. Vectors go in one row at a time with a commit every 25, because the
+documentation says to avoid large batches of vector inserts.
+
+No credential belongs in this repository, in a commit, or in a chat window. `CRDB_URL` lives in the
+environment, `.env` is git ignored, and there is no step in this project where the password has to
+be handed to anyone.
 
 ## Status
 
