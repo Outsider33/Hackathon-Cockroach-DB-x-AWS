@@ -60,3 +60,28 @@ CREATE TABLE chunk (
   belief_id UUID REFERENCES belief(id),
   VECTOR INDEX chunk_emb (embedding)
 );
+
+-- A calculation the agent knows how to run, and what it costs to run it.
+-- Cost matters: a two hour run that cannot conclude is the expensive mistake.
+CREATE TABLE computation (
+  id        UUID   DEFAULT gen_random_uuid() PRIMARY KEY,
+  name      STRING NOT NULL UNIQUE,
+  purpose   STRING NOT NULL,
+  standard  STRING,
+  cost_note STRING
+);
+
+-- What a calculation needs before it can run, and how badly it needs it.
+-- This is the join that turns "what do I know" into "what am I missing".
+-- BLOCKING  : without it the calculation cannot run at all
+-- DEGRADES  : it runs, but the result does not mean what you think
+-- COSMETIC  : listed so nobody goes looking for it a second time
+CREATE TABLE requirement (
+  id             UUID   DEFAULT gen_random_uuid() PRIMARY KEY,
+  computation_id UUID   NOT NULL REFERENCES computation(id),
+  belief_key     STRING NOT NULL,
+  criticality    STRING NOT NULL,
+  why            STRING NOT NULL,
+  CONSTRAINT criticality_is_declared CHECK (criticality IN ('BLOCKING','DEGRADES','COSMETIC')),
+  INDEX requirement_by_key (belief_key)
+);

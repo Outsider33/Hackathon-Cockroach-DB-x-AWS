@@ -83,3 +83,49 @@ SELECT o.id, n.id, n.valid_from,
   END
 FROM belief o JOIN belief n ON o.key = n.key
 WHERE o.valid_to IS NOT NULL AND n.valid_to IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- The open questions. These are not failures of the memory, they are its
+-- output. Each one is copied from a hand written registry in the source
+-- project, where somebody had to maintain it by hand.
+-- ---------------------------------------------------------------------------
+INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
+('brake_disc_mass_kg',     'estimated 4.0 kg by interpolation -- three rotors quoted by the manufacturer, none is ours (0.81 in thickness against .72 on our caliper sheet)', 'NOT_FOUND', 'BESOINS_DONNEES.md sec.1.5 -- the field is literally null', '2026-07-29 00:00:00+00', NULL),
+('rod_end_type',           'uniball or tapered rod end -- the bore is 20 mm in one case and 54 mm in the other. Architecture decision, not a lookup.', 'UNDECIDABLE', 'BESOINS_DONNEES.md sec.2.2', '2026-07-27 00:00:00+00', NULL),
+('hub_bore_radius_mm',     '45 mm, to be confirmed -- drives local mass, not strength (bearing crush is at 7% of ULS)', 'UNDECIDABLE', 'BESOINS_DONNEES.md sec.2.4, marked non-blocking', '2026-07-27 00:00:00+00', NULL),
+('hub_barrel_architecture','A or B -- the largest single item left, 1.0 to 1.7 kg at stake', 'UNDECIDABLE', 'REPRISE.md sec.6, item 1', '2026-07-26 00:00:00+00', NULL),
+('front_wheel',            'Ultra X103 5452BL, 15x4 in, 5 on 205 mm VW, backspace 50.8 mm, offset -12 mm, 7.44 kg', 'ESTABLISHED', 'BESOINS_DONNEES.md sec.2.3, closed 2026-07-27', '2026-07-27 00:00:00+00', NULL),
+('lateral_g',              '1.5 -- conservative by construction: mu falls as Fz rises, so the load is overestimated', 'ESTABLISHED', 'tyre adhesion note, source Guiggiani. Flagged TO CONFIRM for weeks, and never actually a gap.', '2026-07-28 00:00:00+00', NULL),
+('disc_radius_mm',         'dead input -- traced through the code, it enters no calculation (braking torque is wheel radius x Fx)', 'ESTABLISHED', 'BESOINS_DONNEES.md sec.3', '2026-07-28 00:00:00+00', NULL),
+('surface_treatment',      'none -- shot peening is wired and disabled by default, K_V = 1.00', 'ESTABLISHED', 'enabling it gives +15% on the fatigue limit, worth 0.3 to 0.5 kg. Two hours to test.', '2026-07-30 00:00:00+00', NULL);
+
+-- ---------------------------------------------------------------------------
+-- What the agent knows how to compute, and what each calculation needs.
+-- ---------------------------------------------------------------------------
+INSERT INTO computation (name, purpose, standard, cost_note) VALUES
+('fea_run',              'Full mesh + solve + resize loop on the front upright', NULL, 'about 2 hours on the current machine'),
+('fatigue_check_parent', 'Fatigue of the parent metal on the amplitude tensor', 'Crossland / Goodman', 'seconds, once the run has produced tensors'),
+('fatigue_check_welded', 'Fatigue of the welded assemblies', 'EN 1993-1-9', 'seconds'),
+('bolt_check',           'Bolted joint check', 'ISO 898-1 / EN 1993-1-8', 'seconds'),
+('unsprung_mass_budget', 'Unsprung mass budget for the front corner', NULL, 'minutes, but only if every mass is known'),
+('scrub_recompute',      'Recompute scrub radius from wheel offset and rod end spacing', NULL, 'minutes'),
+('rod_end_boss_sizing',  'Size the rod end boss and its local mass', NULL, 'minutes');
+
+INSERT INTO requirement (computation_id, belief_key, criticality, why)
+SELECT c.id, v.k, v.crit, v.why FROM computation c JOIN (VALUES
+ ('fea_run','mesh_independence','BLOCKING','If mesh size is slaved to thickness, the instrument changes with the measurement and the result cannot be compared across iterations.'),
+ ('fea_run','hub_barrel_architecture','BLOCKING','The geometry cannot be generated until A or B is chosen.'),
+ ('fea_run','surface_treatment','DEGRADES','Sets K_V. Wrong value shifts the converged thickness by about 0.9 mm.'),
+ ('fatigue_check_parent','fatigue_amplitude_basis','BLOCKING','Scalar amplitude is blind to stress reversal. Established as of 2026-07-31.'),
+ ('fatigue_check_parent','governing_cycle','BLOCKING','Which pair of load states governs. Hard-coding it hides worse cycles.'),
+ ('fatigue_check_parent','additive_fatigue_data','DEGRADES','No qualification dataset for this alloy and process. The check runs, its absolute value does not transfer to an additive part.'),
+ ('fatigue_check_welded','lateral_g','BLOCKING','Sets the cornering load case.'),
+ ('bolt_check','rod_end_type','BLOCKING','Uniball or tapered changes the bore from 20 to 54 mm, so it changes the joint entirely.'),
+ ('unsprung_mass_budget','brake_disc_mass_kg','BLOCKING','Estimated, not measured. The budget reads 27.25 kg known out of 40 declared, so an estimate here can hide an overrun.'),
+ ('unsprung_mass_budget','front_wheel','BLOCKING','7.44 kg, closed on 2026-07-27.'),
+ ('unsprung_mass_budget','hub_bore_radius_mm','DEGRADES','Drives local mass only, not strength.'),
+ ('scrub_recompute','front_wheel','BLOCKING','Offset is what places the contact patch.'),
+ ('scrub_recompute','disc_radius_mm','COSMETIC','Kept in the spec, enters no calculation. Listed so nobody goes looking for it again.'),
+ ('rod_end_boss_sizing','rod_end_type','BLOCKING','Nothing about the boss can be sized before this decision.'),
+ ('rod_end_boss_sizing','hub_barrel_architecture','DEGRADES','Changes the surrounding envelope.')
+) AS v(cname,k,crit,why) ON c.name = v.cname;

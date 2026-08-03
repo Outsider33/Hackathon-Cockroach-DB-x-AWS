@@ -68,3 +68,45 @@ ORDER BY revisions DESC, last_revised DESC;
 -- history explicitly instead of reading it off the MVCC layer.
 -- ---------------------------------------------------------------------------
 -- SELECT count(*) FROM belief AS OF SYSTEM TIME '-10m';
+
+-- ---------------------------------------------------------------------------
+-- 6. THE ONE THAT SAVES TIME: can I run this, and if not, what is missing?
+--
+-- Verdict on the seeded data:
+--   fea_run              BLOCKED   2 blocking gaps   about 2 hours
+--   bolt_check           BLOCKED   1 blocking gap
+--   rod_end_boss_sizing  BLOCKED   1 blocking gap
+--   unsprung_mass_budget BLOCKED   1 blocking gap
+--   fatigue_check_parent CAN RUN
+--   fatigue_check_welded CAN RUN
+--   scrub_recompute      CAN RUN
+--
+-- The two hour FEA run is blocked on a decision nobody had written down as a
+-- blocker, and on a measurement problem that was known and filed as a note.
+-- ---------------------------------------------------------------------------
+SELECT c.name AS computation,
+       count(*) FILTER (WHERE b.status IS DISTINCT FROM 'ESTABLISHED'
+                          AND r.criticality = 'BLOCKING') AS blocking_gaps,
+       CASE WHEN count(*) FILTER (WHERE b.status IS DISTINCT FROM 'ESTABLISHED'
+                                    AND r.criticality = 'BLOCKING') = 0
+            THEN 'CAN RUN' ELSE 'BLOCKED' END AS verdict,
+       c.cost_note
+FROM computation c
+LEFT JOIN requirement r ON r.computation_id = c.id
+LEFT JOIN belief b ON b.key = r.belief_key AND b.valid_to IS NULL
+GROUP BY c.name, c.cost_note
+ORDER BY blocking_gaps DESC, c.name;
+
+-- ---------------------------------------------------------------------------
+-- 7. And the detail: exactly which input, at what criticality, and why.
+-- ---------------------------------------------------------------------------
+SELECT c.name AS computation,
+       r.criticality,
+       r.belief_key,
+       coalesce(b.status, 'ABSENT') AS status,
+       r.why
+FROM computation c
+JOIN requirement r ON r.computation_id = c.id
+LEFT JOIN belief b ON b.key = r.belief_key AND b.valid_to IS NULL
+WHERE b.id IS NULL OR b.status <> 'ESTABLISHED'
+ORDER BY r.criticality, c.name;

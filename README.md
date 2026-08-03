@@ -1,145 +1,165 @@
-# A memory that records what it does not know
+# A memory that knows what it is missing
 
-**CockroachDB × AWS Hackathon — "Build with Agentic Memory"**
+**CockroachDB × AWS Hackathon, Build with Agentic Memory**
 
-An agent memory built on two ideas that most agent memories skip:
+I spend my evenings designing a suspension upright with an AI agent. Generative CAD, meshing,
+finite elements, a fatigue criterion, a loop that resizes the part until it passes. One full run
+costs about two hours on my machine.
 
-1. **Uncertainty is a first-class value.** `UNDECIDABLE` and `NOT_FOUND` are stored at the same
-   rank as facts, enforced by a `CHECK` constraint. An empty cell is an invisible debt; a row that
-   says `NOT_FOUND` is a documented decision.
-2. **A belief has a lifetime, and a reason for ending.** Beliefs are append-only over closed
-   intervals. Every revision carries the evidence that caused it, in a `NOT NULL` column — because
-   a revision without evidence is an overwrite, not learning.
+The expensive mistake is not a wrong result. It is a two hour run that could never have concluded,
+because something it needed was not known yet. That happened often enough that I started keeping a
+file called "data needs", by hand, listing what was missing and whether it blocked anything.
 
----
+This project is that file, turned into a memory the agent can query.
 
-## What this project does not prove
+It answers three questions:
 
-*Read this first. It is here because the rest of the README is more convincing than the code.*
+1. **What do I believe today, and how sure am I?**
+2. **What changed my mind, and what evidence did it?**
+3. **Can I run this calculation, and if not, what exactly is missing?**
 
-- **The dataset is small on purpose.** 14 revisions across 17 beliefs. They are real, dated and
-  traceable to a source file, but they are not a benchmark and nothing here demonstrates scale.
-- **Vector search here is a working integration, not a performance claim.** Everything was run on
-  CockroachDB v26.2.1; no latency or recall was measured.
-- **`AS OF SYSTEM TIME` is not the mechanism.** On the free Basic plan the MVCC window is
-  `gc.ttlseconds = 4500` — 1 hour 15 minutes, not configurable. Measured, not assumed. That is the
-  reason history is modelled explicitly rather than read off the storage layer.
-- **The author did not write this code by hand.** It was specified, driven and verified by him,
-  and generated with an AI agent. The engineering claims in the dataset are his; the SQL is a
-  collaboration. Saying otherwise would be the first thing this memory would have to revise.
+The third one is the one that saves the two hours.
 
-**Disclosure.** All code in this repository is new, written during the submission period. The
-*data* is not: the 14 revisions are extracted from dated engineering logs in a private repository
-that predates the hackathon. That is the point of them — they could not have been invented for a
-demo, and they are unflattering enough that nobody would have.
+## The idea in one table
 
----
+Most agent memories store what is known. This one gives equal weight to what is not.
+`UNDECIDABLE` and `NOT_FOUND` are statuses, written into a `CHECK` constraint, so an empty cell is
+impossible to leave by accident. An empty cell is an invisible debt. A row that says `NOT_FOUND` is
+a decision somebody made and can be asked about.
 
-## Why the MVCC layer is not enough
+Then each calculation declares what it needs, and how badly:
 
-A distributed database already keeps history. So the honest question for a hackathon on agentic
-memory is: why model it at all?
+| | |
+|---|---|
+| `BLOCKING` | without it the calculation cannot run |
+| `DEGRADES` | it runs, but the number does not mean what you think |
+| `COSMETIC` | listed so nobody goes looking for it a second time |
 
-> **MVCC gives you 75 minutes of accidental history. An agent needs deliberate history.**
+"What is missing" stops being a document somebody maintains, and becomes a join.
 
-The difference matters exactly when the agent was wrong three weeks ago, which is the only case
-anybody cares about. Accidental history expires, has no notion of *why*, and cannot distinguish a
-fact that was corrected from a fact that was merely rewritten. Deliberate history keeps the
-interval, the evidence, and the source — forever, and queryable.
+```
+computation            blocking gaps   verdict   cost
+fea_run                      2         BLOCKED   about 2 hours
+bolt_check                   1         BLOCKED   seconds
+rod_end_boss_sizing          1         BLOCKED   minutes
+unsprung_mass_budget         1         BLOCKED   minutes
+fatigue_check_parent         0         CAN RUN
+fatigue_check_welded         0         CAN RUN
+scrub_recompute              0         CAN RUN
+```
 
-`AS OF SYSTEM TIME` still earns its place as a secondary demonstration: recovering an accidental
-overwrite inside the 75-minute window. It is a safety net, not a memory.
+The two hour run is blocked on two things. One is an architecture decision nobody had written down
+as a blocker. The other is a measurement problem that was known, filed as a note, and left in
+place: mesh size was slaved to part thickness, so the instrument changed with the measurement, and
+two runs of the same commit returned 14.00 mm and 13.28 mm.
 
----
+The vehicle behind this is ambitious and touches a lot of disciplines at once. Nobody holds all of
+its variables in their head. That is the real job of this memory.
+
+## Why not just read the database history
+
+CockroachDB already keeps history, so it is a fair question.
+
+On the free plan, `AS OF SYSTEM TIME` reaches back 75 minutes, and that limit is not configurable.
+I measured it rather than assuming it. But even with a longer window it would not do the job.
+Storage history tells you what a row used to say. It does not tell you why it changed, what
+evidence made it change, or which of those values you were unsure about at the time.
+
+So the history is modelled. Beliefs are append only over closed intervals, and every revision
+carries its evidence in a `NOT NULL` column, because a revision without evidence is an overwrite
+and not learning. Time travel stays as a safety net for the last 75 minutes, which is what it is
+good at.
 
 ## The data is real, and it is unflattering
 
-None of the seed data is synthetic. It comes from a two-week engineering log where an AI agent and
-its author ran a generative-CAD → meshing → FEA → fatigue pipeline for a suspension upright. Every
-row is a moment where the agent was wrong, found out, and recorded what changed its mind.
+None of the seed data is invented. Fourteen revisions, all from dated logs, all moments where the
+agent or I got something wrong and found out.
 
-| the agent believed | it turned out | what changed its mind |
+| I believed | it turned out | what changed my mind |
 |---|---|---|
-| `sigma_a = (VM(Σmax) − VM(Σmin))/2` | `sigma_a = VM(Σmax − Σmin)/2` | Von Mises carries no sign, so a full stress reversal read as **zero amplitude**. On an analytic case, an **18% underestimate**. |
-| part mass `5.494 kg` | `6.007 kg` | a consequence of the above. A full day of weight optimisation was cancelled — **the 5.494 kg had never existed**. |
-| the governing cycle is left/right wheel inversion | `8g bump ↔ 1.5g cornering`, two **orthogonal** cases | sweeping all 15 state pairs instead of the hard-coded one. The reasoning was right in principle and **wrong about the culprit**. |
-| the lightening optimiser produces pockets | **0 pockets, for two full runs** | the run log had been printing `n_poches = 0` and nobody read it. |
-| the submission repository is public | **404** | somebody finally clicked the link from a logged-out browser. |
+| `sigma_a = (VM(Σmax) − VM(Σmin))/2` | `sigma_a = VM(Σmax − Σmin)/2` | Von Mises has no sign, so a full stress reversal read as zero amplitude. On an analytic case, 18 percent optimistic. |
+| part mass 5.494 kg | 6.007 kg | a consequence of the line above. A whole day of weight saving cancelled. The 5.494 kg had never existed. |
+| the governing cycle is left to right wheel inversion | 8g bump against 1.5g cornering, two orthogonal cases | sweeping all 15 pairs of load states instead of the one I had hard coded. The reasoning was right and the culprit was wrong. |
+| the lightening optimiser produces pockets | zero pockets, for two full runs | the log had been printing `n_poches = 0` the whole time and nobody read it. |
+| my contest repository is public | 404 | somebody finally clicked the link from a logged out browser. |
 
-And three things it still does not know, stored as such: `mesh_independence` is `UNDECIDABLE`
-(two runs of the same commit return 14.00 mm and 13.28 mm, unexplained), `additive_fatigue_data`
-is `NOT_FOUND`, `published_numbers_checked` is `UNDECIDABLE`.
+Three things it still does not know are stored as such, including a brake disc mass that is an
+interpolation and not a measurement, sitting inside a mass budget that reads 27.25 kg known out of
+40 declared.
 
-**Query 1 is the one to look at.** Ask what the agent believed on 2026-07-30 and you get a *mixed*
-state: it already knew the hub barrel was unmanufacturable and the optimiser was dead, while still
-believing the wrong thickness, the wrong mass and the wrong governing cycle. No file snapshot can
-reconstruct that, and no `git checkout` can tell you which of those beliefs were uncertain.
+Ask what I believed on 2026-07-30 and you get a mixed answer. I already knew the hub barrel was
+not manufacturable and that the optimiser was dead, and I still believed the wrong thickness, the
+wrong mass and the wrong governing cycle. No file snapshot reconstructs that, and no `git checkout`
+tells you which of those I was unsure about.
 
----
+## What this does not prove
+
+- The dataset is small on purpose. Fourteen revisions over seventeen beliefs, one subsystem of one
+  vehicle. It is real and traceable, it is not a benchmark, and nothing here demonstrates scale.
+- Vector search is a working integration, not a performance claim. Nothing was measured on latency
+  or recall.
+- The requirement graph is only as good as the requirements somebody declares. It catches a gap
+  that was written down. It does not discover an input nobody thought of.
+- The code here is new, written during the submission window. The data is older. It comes from a
+  private engineering repository, and that is the point of it. Nobody would invent failures this
+  unflattering for a demo.
+- I use AI assistants to build, which the rules allow. I specify, drive and check the work.
 
 ## Tools used
 
-**CockroachDB (2 of the 4 eligible tools):**
+**CockroachDB**, two of the four eligible tools:
 
-| tool | how it is used |
+| tool | how |
 |---|---|
-| **CockroachDB Cloud managed MCP server** | the entire schema was created and seeded through it, from the agent session — no local client involved. Its limits are documented below and in `sql/queries.sql`. |
-| **Distributed vector indexing** | semantic search over the corpus, declared inline on an empty table so it can never be built on a populated one. |
+| Cloud managed MCP server | the whole schema and dataset were created through it, from the agent session, with no local client |
+| Distributed vector indexing | semantic search over the corpus, declared inline on an empty table |
 
-All three distance operators work on v26.2.1 — measured, not assumed:
-`<-> = 1.4142135623730951`, `<=> = 1`, `<#> = -0` on orthogonal unit vectors. The index itself is
-built for one operator class (here the default, L2); a query using a different operator is correct
-but will not use it. Titan embeddings are normalised, so L2 ranks identically to cosine.
+**AWS**: Amazon Bedrock, `amazon.titan-embed-text-v2:0`, 1024 dimensions, `us-east-1`.
 
-**AWS:** **Amazon Bedrock**, `amazon.titan-embed-text-v2:0`, 1024 dimensions, `us-east-1`.
+### Feedback on the managed MCP server
 
-### What we learned about the managed MCP server
+The organisers asked, and these cost real time:
 
-Reported here because the organisers asked for feedback on the AI tooling, and because these cost
-real time:
-
-- **`create_table` accepts only `CREATE TABLE`**, and there is no generic DDL tool. Secondary
-  indexes and vector indexes must therefore be **declared inline** in the table definition. This
-  turned out to be a blessing: `CREATE VECTOR INDEX` blocks mutations until its backfill finishes,
-  and an inline declaration makes it structurally impossible to create the index on a populated
-  table.
-- **`AS OF SYSTEM TIME` is rejected outright** by the SQL-over-HTTP path, at any offset, with
-  `inconsistent AS OF SYSTEM TIME timestamp`. Time-travel queries need pgwire.
-- **Hard limits worth knowing before you design around it:** 16,384 characters per statement,
-  a 20-second query timeout, a 10 KiB response cap, and `SELECT` defaults to `LIMIT 25`. Ingestion
-  has to be chunked for the statement cap as much as for the vector-batching advice.
-
----
+- `create_table` accepts only `CREATE TABLE`, and there is no generic DDL tool, so every index has
+  to be declared inline. That turned out well. `CREATE VECTOR INDEX` blocks writes until its
+  backfill finishes, and an inline declaration makes it impossible to build on a populated table.
+- There is no `UPDATE`, `DELETE` or `DROP`. A scratch database created by mistake cannot be cleaned
+  up through the same channel that created it.
+- `AS OF SYSTEM TIME` is rejected at any offset with `inconsistent AS OF SYSTEM TIME timestamp`.
+  Time travel needs pgwire.
+- Worth knowing before designing around it: 16384 characters per statement, 20 second timeout,
+  10 KiB response cap, and `SELECT` defaults to 25 rows.
+- All three distance operators work on v26.2.1. I measured them rather than trusting the older
+  docs: `<->` gives 1.4142135623730951, `<=>` gives 1, `<#>` gives -0 on orthogonal unit vectors.
+  The index itself is built for one operator class, here the default L2, so a query with a
+  different operator is correct but will not use the index. Titan embeddings are normalised, so L2
+  ranks the same as cosine.
 
 ## Running it
 
 ```bash
-# 1. A CockroachDB Basic cluster (free, no card) at cockroachlabs.cloud
+# A CockroachDB Basic cluster, free and no card, at cockroachlabs.cloud
 export CRDB_URL='postgresql://<user>:<password>@<host>:26257/agentmem?sslmode=verify-full'
 
-# 2. Schema, then data. The order matters -- see the comments in schema.sql.
 psql "$CRDB_URL" -f sql/schema.sql
 psql "$CRDB_URL" -f sql/seed.sql
-
-# 3. The demonstration
 psql "$CRDB_URL" -f sql/queries.sql
 ```
 
-Requires `psql` (any recent PostgreSQL client) for time-travel queries; everything else works
-through the managed MCP server. Embedding generation requires AWS credentials with
-`bedrock:InvokeModel` in `us-east-1`. Copy `.env.example` to `.env` and fill it in — `.env` is
-git-ignored, and **no credential belongs in this repository or in a chat window**.
+The order matters and the comments in `schema.sql` say why. Everything except the time travel query
+also works through the managed MCP server. Embeddings need AWS credentials with
+`bedrock:InvokeModel` in `us-east-1`. Copy `.env.example` to `.env`, which is git ignored. No
+credential belongs in this repository, in a commit, or in a chat window.
 
 ## Status
 
 | | |
 |---|---|
-| Schema, seed data, queries 1–4 | ✅ verified by execution, 2026-08-04 |
-| Corpus ingestion + Bedrock embeddings | 🚧 in progress |
-| Vector search over the corpus | 🚧 in progress |
-| Demo application URL | 🚧 in progress |
-| `AS OF SYSTEM TIME` recovery demo | 🚧 pending, pgwire only |
+| Schema, seed data, queries | done, verified by running them on 2026-08-04 |
+| Corpus ingestion and Bedrock embeddings | in progress |
+| Agent loop that proposes a revision | in progress |
+| Demo application | in progress |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
