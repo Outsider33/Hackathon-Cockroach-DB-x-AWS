@@ -19,14 +19,19 @@ An agent memory built on two ideas that most agent memories skip:
 
 - **The dataset is small on purpose.** 14 revisions across 17 beliefs. They are real, dated and
   traceable to a source file, but they are not a benchmark and nothing here demonstrates scale.
-- **`VECTOR` and the C-SPANN index are in preview** in CockroachDB since 25.2. Vector search here
-  is a working integration, not a performance claim.
+- **Vector search here is a working integration, not a performance claim.** Everything was run on
+  CockroachDB v26.2.1; no latency or recall was measured.
 - **`AS OF SYSTEM TIME` is not the mechanism.** On the free Basic plan the MVCC window is
   `gc.ttlseconds = 4500` — 1 hour 15 minutes, not configurable. Measured, not assumed. That is the
   reason history is modelled explicitly rather than read off the storage layer.
 - **The author did not write this code by hand.** It was specified, driven and verified by him,
   and generated with an AI agent. The engineering claims in the dataset are his; the SQL is a
   collaboration. Saying otherwise would be the first thing this memory would have to revise.
+
+**Disclosure.** All code in this repository is new, written during the submission period. The
+*data* is not: the 14 revisions are extracted from dated engineering logs in a private repository
+that predates the hackathon. That is the point of them — they could not have been invented for a
+demo, and they are unflattering enough that nobody would have.
 
 ---
 
@@ -79,7 +84,12 @@ reconstruct that, and no `git checkout` can tell you which of those beliefs were
 | tool | how it is used |
 |---|---|
 | **CockroachDB Cloud managed MCP server** | the entire schema was created and seeded through it, from the agent session — no local client involved. Its limits are documented below and in `sql/queries.sql`. |
-| **Distributed vector indexing (`VECTOR` + C-SPANN)** | semantic search over the corpus, declared inline on an empty table. |
+| **Distributed vector indexing** | semantic search over the corpus, declared inline on an empty table so it can never be built on a populated one. |
+
+All three distance operators work on v26.2.1 — measured, not assumed:
+`<-> = 1.4142135623730951`, `<=> = 1`, `<#> = -0` on orthogonal unit vectors. The index itself is
+built for one operator class (here the default, L2); a query using a different operator is correct
+but will not use it. Titan embeddings are normalised, so L2 ranks identically to cosine.
 
 **AWS:** **Amazon Bedrock**, `amazon.titan-embed-text-v2:0`, 1024 dimensions, `us-east-1`.
 
@@ -95,8 +105,9 @@ real time:
   table.
 - **`AS OF SYSTEM TIME` is rejected outright** by the SQL-over-HTTP path, at any offset, with
   `inconsistent AS OF SYSTEM TIME timestamp`. Time-travel queries need pgwire.
-- **Only euclidean `<->`** is supported for vector distance; `<=>` and `<#>` fail. Titan embeddings
-  are normalised, so euclidean ranks identically to cosine.
+- **Hard limits worth knowing before you design around it:** 16,384 characters per statement,
+  a 20-second query timeout, a 10 KiB response cap, and `SELECT` defaults to `LIMIT 25`. Ingestion
+  has to be chunked for the statement cap as much as for the vector-batching advice.
 
 ---
 

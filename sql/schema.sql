@@ -7,14 +7,16 @@
 --      backfill completes. The vector index is therefore declared INLINE in
 --      CREATE TABLE -- i.e. on an empty table, before any ingestion. Declaring
 --      it inline makes the constraint impossible to violate later.
---   2. Only euclidean distance <-> is supported. Cosine <=> and inner product
---      <#> are on the roadmap and fail today. Titan embeddings are normalised,
---      so euclidean ranks identically to cosine.
---   3. Large insert batches degrade vector write performance. Ingest in
---      batches of 50 to 100 rows.
+--   2. All three distance operators work on v26.2.1 (measured: <-> , <=> , <#>).
+--      But an index is built for ONE operator class -- the default here is L2
+--      (vector_l2_ops). A query using <=> against an L2 index is correct and
+--      does not use the index. Titan embeddings are normalised, so L2 ranks
+--      identically to cosine and the default is the right one here.
+--   3. Large insert batches degrade vector write performance -- the docs say
+--      explicitly to avoid batching. Ingest in batches of 50 to 100 rows.
 --
--- VECTOR and the C-SPANN index are in preview since 25.2. See the README,
--- section "What this project does not prove".
+-- Also, from the managed MCP server: 16,384 characters per statement, a
+-- 20-second timeout and a 10 KiB response cap. Ingestion must be chunked.
 
 CREATE DATABASE IF NOT EXISTS agentmem;
 USE agentmem;
