@@ -114,7 +114,20 @@ tells you which of those I was unsure about.
 | Cloud managed MCP server | the whole schema and dataset were created through it, from the agent session, with no local client |
 | Distributed vector indexing | semantic search over the corpus, declared inline on an empty table |
 
-**AWS**: Amazon Bedrock, `amazon.titan-embed-text-v2:0`, 1024 dimensions, `us-east-1`.
+**AWS**: the demo is deployed on **S3 and Lambda**. **Amazon Bedrock** is implemented for
+embeddings and is not what generated the vectors currently in the database, which is worth
+explaining rather than hiding.
+
+The account is one day old and sits at the default Bedrock quota. The documentation states that
+default quotas depend on, among other things, payment history. Titan Text Embeddings V2 offers the
+Standard tier only, so there is no throughput to buy, and it supports neither geo nor global
+cross-region inference. `ThrottlingException` came back for the account root and for a scoped IAM
+user alike, across four regions, for over an hour.
+
+So the embedding backend is a flag. `--backend bedrock` is the code that was written first;
+`--backend local` runs a multilingual sentence transformer on the CPU and is what the current
+vectors come from. A demo that depends on a service which is throttling you is a demo that dies on
+screen, and swapping the backend costs one argument.
 
 ### Feedback on the managed MCP server
 
@@ -172,9 +185,11 @@ be handed to anyone.
 | | |
 |---|---|
 | Schema, seed data, queries | done, verified by running them on 2026-08-04 |
-| Corpus ingestion and Bedrock embeddings | in progress |
+| Corpus ingestion, 171 chunks, 18 anchored to a belief | done, local backend |
+| Vector search, including French corpus against English questions | done |
+| Bedrock embeddings | written, blocked on account quota |
 | Agent loop that proposes a revision | in progress |
-| Demo application | in progress |
+| Demo application on S3 and Lambda | in progress |
 
 ## License
 

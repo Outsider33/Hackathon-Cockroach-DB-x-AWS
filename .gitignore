@@ -1,5 +1,9 @@
 # Credentials -- never commit these.
-.env
+# Everything that starts with .env is ignored, and the template is the single
+# explicit exception. A file called .env.local or .env.example.env is a normal
+# thing to end up with, and it must not depend on anyone noticing.
+.env*
+!.env.example
 *.pem
 out.json
 
