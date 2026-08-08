@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent memory that says what it is missing</title>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --panel: #14171c;
+    --line: #232830;
+    --text: #d8dce3;
+    --dim: #7c8494;
+    --accent: #6ea8fe;
+    --blocked: #e06c75;
+    --ok: #7fb069;
+    --unknown: #d9a441;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 22px 80px; }
+
+  header h1 { font-size: 26px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--dim); max-width: 66ch; }
+  header .sub { margin-top: 14px; font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
+  header .sub b { color: var(--text); font-weight: 500; }
+
+  .ask { margin: 34px 0 10px; display: flex; gap: 10px; }
+  .ask input {
+    flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    padding: 12px 14px; border-radius: 8px; font-size: 15px; font-family: inherit;
+  }
+  .ask input:focus { outline: none; border-color: var(--accent); }
+  .ask button {
+    background: var(--accent); color: #0d0f12; border: 0; padding: 0 22px;
+    border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .ask button:disabled { opacity: 0.5; cursor: default; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 26px; }
+  .chips button {
+    background: transparent; border: 1px solid var(--line); color: var(--dim);
+    padding: 5px 11px; border-radius: 999px; font-size: 12.5px; cursor: pointer;
+    font-family: inherit;
+  }
+  .chips button:hover { border-color: var(--accent); color: var(--text); }
+
+  .route {
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+    border-left: 2px solid var(--accent); padding: 4px 0 4px 12px; margin-bottom: 18px;
+  }
+  .route b { color: var(--accent); font-weight: 600; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+  }
+  .card.blocked { border-left: 3px solid var(--blocked); }
+  .card.can-run { border-left: 3px solid var(--ok); }
+  .card h3 { margin: 0 0 2px; font-size: 15px; font-family: var(--mono); font-weight: 600; }
+  .card .why { color: var(--dim); font-size: 13.5px; margin: 0 0 10px; }
+  .verdict { float: right; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em; }
+  .verdict.blocked { color: var(--blocked); }
+  .verdict.can-run { color: var(--ok); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  td { padding: 6px 10px 6px 0; vertical-align: top; border-top: 1px solid var(--line); }
+  tr:first-child td { border-top: 0; }
+  td.key { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+  td.crit { font-family: var(--mono); font-size: 11px; letter-spacing: 0.05em; white-space: nowrap; }
+  .status { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .status.ESTABLISHED { color: var(--ok); background: rgba(127,176,105,0.12); }
+  .status.UNDECIDABLE { color: var(--unknown); background: rgba(217,164,65,0.12); }
+  .status.NOT_FOUND   { color: var(--blocked); background: rgba(224,108,117,0.12); }
+  .status.ABSENT      { color: var(--dim); background: rgba(124,132,148,0.12); }
+
+  .arrow { color: var(--dim); font-family: var(--mono); }
+  .before { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--line); }
+  .evidence { color: var(--dim); font-size: 13px; margin-top: 6px; }
+  .when { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
+  .hit { border-top: 1px solid var(--line); padding: 12px 0; }
+  .hit:first-child { border-top: 0; }
+  .hit .meta { font-family: var(--mono); font-size: 12px; color: var(--dim); margin-bottom: 5px; }
+  .hit .meta .d { color: var(--accent); }
+  .hit p { margin: 0; font-size: 13.5px; color: var(--text); white-space: pre-wrap; }
+
+  .notice { color: var(--unknown); font-size: 13.5px; }
+  .notice + .chips { margin-top: 12px; }
+
+  footer {
+    margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+  }
+  footer a { color: var(--dim); }
+  .spin { color: var(--dim); font-family: var(--mono); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>The memory that says what it is missing</h1>
+  <p>
+    An engineering agent keeps its beliefs in CockroachDB, with the interval over which each one was
+    held and the evidence that ended it. Nothing is overwritten. What it does <em>not</em> know is
+    stored at the same rank as what it does, so the question &ldquo;can this two-hour computation
+    run yet&rdquo; is a join rather than an opinion.
+  </p>
+  <p class="sub" id="stats">connecting&hellip;</p>
+</header>
+
+<div class="ask">
+  <input id="q" autocomplete="off" spellcheck="false"
+         placeholder="what is blocking the FEA run">
+  <button id="go">Ask</button>
+</div>
+
+<div class="chips" id="examples">
+  <button>what is blocking the FEA run</button>
+  <button>what changed my mind</button>
+  <button>what did I believe on 2026-07-30</button>
+  <button>why did the part get thicker</button>
+  <button>what is unknown about the brake disc</button>
+</div>
+
+<div id="route"></div>
+<div id="out"></div>
+
+<footer>
+  <span id="server">&nbsp;</span>
+  <a href="https://github.com/Outsider33/Hackathon-Cockroach-DB-x-AWS">source</a>
+</footer>
+
+</div>
+
+<script src="config.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const escape = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+async function api(params) {
+  const url = window.API_BASE + "?" + new URLSearchParams(params).toString();
+  const response = await fetch(url);
+  return { status: response.status, body: await response.json() };
+}
+
+// ---- renderers, one per view -------------------------------------------
+
+function renderMissing(data) {
+  return data.computations.map((c) => {
+    const cls = c.verdict === "BLOCKED" ? "blocked" : "can-run";
+    const rows = c.requirements.map((r) => `
+      <tr>
+        <td class="key">${escape(r.key)}</td>
+        <td class="crit" style="color:${r.satisfied ? "var(--dim)" : "var(--blocked)"}">
+          ${escape(r.criticality)}</td>
+        <td><span class="status ${escape(r.status)}">${escape(r.status)}</span></td>
+        <td>${escape(r.value || r.why)}</td>
+      </tr>`).join("");
+    return `
+      <div class="card ${cls}">
+        <span class="verdict ${cls}">${escape(c.verdict)}</span>
+        <h3>${escape(c.computation)}</h3>
+        <p class="why">${escape(c.purpose)}${c.cost_note ? " &middot; costs " + escape(c.cost_note) : ""}</p>
+        <table>${rows}</table>
+      </div>`;
+  }).join("");
+}
+
+function renderRevisions(data) {
+  return `<div class="card">` + data.revisions.map((r) => `
+    <div class="hit">
+      <div class="meta"><span class="when">${escape(r.occurred_at.slice(0, 10))}</span>
+        &nbsp; ${escape(r.key)}</div>
+      <p><span class="before">${escape(r.believed_before || "(nothing)")}</span>
+         <span class="arrow"> &rarr; </span>${escape(r.believed_after)}</p>
+      <p class="evidence">${escape(r.evidence)}${r.evidence_source
+        ? " &middot; " + escape(r.evidence_source) : ""}</p>
+    </div>`).join("") + `</div>`;
+}
+
+function renderAsof(data) {
+  const rows = data.beliefs.map((b) => `
+    <tr>
+      <td class="key">${escape(b.key)}</td>
+      <td><span class="status ${escape(b.status)}">${escape(b.status)}</span></td>
+      <td>${escape(b.value)}</td>
+    </tr>`).join("");
+  return `<div class="card">
+      <p class="why">${data.beliefs.length} beliefs held on ${escape(data.on)}.
+      ${data.revised_since} of them have been revised since &mdash; this is the state as it was,
+      not the state as it is.</p>
+      <table>${rows}</table>
+    </div>`;
+}
+
+function renderSearch(data) {
+  if (data.status === "NO_EMBEDDER") {
+    const chips = data.embedded_questions
+      .map((q) => `<button>${escape(q)}</button>`).join("");
+    return `<div class="card">
+        <p class="notice">No embedding for that question.</p>
+        <p class="why">${escape(data.reason)}</p>
+        <div class="chips embedded">${chips}</div>
+      </div>`;
+  }
+  return `<div class="card">` + data.hits.map((h) => `
+    <div class="hit">
+      <div class="meta"><span class="d">${h.distance}</span> &nbsp; ${escape(h.file)}
+        ${h.belief_key ? `&nbsp; &middot; &nbsp; ${escape(h.belief_key)}
+          <span class="status ${escape(h.belief_status)}">${escape(h.belief_status)}</span>` : ""}
+      </div>
+      <p>${escape(h.text)}</p>
+    </div>`).join("") + `</div>`;
+}
+
+const RENDER = {
+  missing: renderMissing,
+  revisions: renderRevisions,
+  asof: renderAsof,
+  search: renderSearch,
+};
+
+const ROUTE_NOTE = {
+  missing: "structural &rarr; <b>SQL join</b> over computation &times; requirement &times; belief. Exact answer.",
+  revisions: "structural &rarr; <b>SQL join</b> over revision &times; belief, ordered by belief time.",
+  asof: "structural &rarr; <b>interval query</b> on belief time. Not an MVCC snapshot: that window is 75 minutes here, these revisions are days apart.",
+  search: "open question &rarr; <b>vector index</b>, distributed C-SPANN over the corpus.",
+};
+
+async function ask(question) {
+  $("go").disabled = true;
+  $("route").innerHTML = "";
+  $("out").innerHTML = `<p class="spin">asking&hellip;</p>`;
+  try {
+    const { body } = await api({ view: "ask", q: question });
+    if (body.error) throw new Error(body.error);
+    const render = RENDER[body.view];
+    $("route").innerHTML = `<div class="route">${ROUTE_NOTE[body.view] || ""}
+      &nbsp; <span style="opacity:.6">${body.elapsed_ms} ms</span></div>`;
+    $("out").innerHTML = render ? render(body)
+      : `<pre class="card">${escape(JSON.stringify(body, null, 2))}</pre>`;
+  } catch (error) {
+    $("out").innerHTML = `<div class="card"><p class="notice">
+      ${escape(error.message)} &mdash; the API did not answer.</p></div>`;
+  }
+  $("go").disabled = false;
+}
+
+function run() {
+  const question = $("q").value.trim();
+  if (question) ask(question);
+}
+
+$("go").onclick = run;
+$("q").onkeydown = (event) => { if (event.key === "Enter") run(); };
+document.addEventListener("click", (event) => {
+  if (event.target.tagName !== "BUTTON" || !event.target.closest(".chips")) return;
+  $("q").value = event.target.textContent.trim();
+  run();
+});
+
+api({ view: "health" }).then(({ body }) => {
+  const d = body.database;
+  $("stats").innerHTML =
+    `<b>${d.current_beliefs}</b> beliefs held now, <b>${d.beliefs}</b> ever &nbsp;&middot;&nbsp; ` +
+    `<b>${d.revisions}</b> revisions &nbsp;&middot;&nbsp; ` +
+    `<b>${d.chunks}</b> indexed chunks &nbsp;&middot;&nbsp; ` +
+    `<b>${d.requirements}</b> requirements over <b>${d.computations}</b> computations`;
+  $("server").textContent = d.server.split(" (")[0] + " · " + body.elapsed_ms + " ms";
+}).catch(() => {
+  $("stats").textContent = "the API is not answering";
+});
+
+$("q").value = "what is blocking the FEA run";
+ask($("q").value);
+</script>
+</body>
+</html>

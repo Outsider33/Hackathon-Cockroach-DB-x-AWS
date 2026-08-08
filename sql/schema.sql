@@ -52,6 +52,14 @@ CREATE TABLE revision (
 -- The corpus, anchored to the beliefs it supports. Embeddings and facts live
 -- in the same database and are written in the same transaction: no ETL, no
 -- second system to keep in sync.
+--
+-- The width below is the Bedrock one. It is not what the loaded corpus uses:
+-- Bedrock was throttled at the account level on 2026-08-04, so the 171 chunks
+-- were embedded locally with paraphrase-multilingual-MiniLM-L12-v2, which is
+-- 384 wide. ingest/embed_and_load.py drops and recreates this table at the
+-- width of whichever backend it runs with, so the live table is VECTOR(384)
+-- today and this file is the shape it takes once Bedrock is reachable again.
+-- Read the width from the backend, not from here.
 CREATE TABLE chunk (
   id        UUID   DEFAULT gen_random_uuid() PRIMARY KEY,
   file      STRING NOT NULL,

@@ -20,3 +20,8 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Build artefacts. The Lambda zip and its vendored dependencies are produced
+# by deploy/build_lambda.py and must never be committed: hundreds of files and
+# a binary that goes stale the moment handler.py changes.
+dist/

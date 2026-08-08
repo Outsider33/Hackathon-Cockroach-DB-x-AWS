@@ -30,7 +30,13 @@ from urllib.parse import urlparse, unquote
 # The console on the development machine is GBK. The corpus contains emoji, so
 # without this the script dies on the first result it tries to print, after the
 # work is already done.
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+#
+# Wrapping twice is worse than not wrapping at all: the first wrapper gets
+# collected, closes the real stdout buffer under the second one, and everything
+# downstream dies on "I/O operation on closed file". So the guard is idempotent
+# and any module may import this one.
+if getattr(sys.stdout, "encoding", "").lower() not in ("utf-8", "utf8"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import pg8000.dbapi
 
