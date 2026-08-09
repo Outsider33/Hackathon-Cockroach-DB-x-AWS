@@ -1,4 +1,9 @@
-"""The API behind the demo. One AWS Lambda, one Function URL, no gateway.
+"""The API behind the demo. One AWS Lambda behind one HTTP API.
+
+It was a Lambda function URL until 2026-08-09, when that URL answered 403 to
+every caller on a correct AuthType NONE configuration and CloudWatch showed the
+function was never reached. Nothing in this file changed: function URLs and
+HTTP APIs deliver the same event, payload format 2.0. See deploy/deploy.sh.
 
 The whole point of the router below: a question like "what is blocking the FEA
 run" is STRUCTURAL. It has an exact answer, and that answer is a join. Asking a

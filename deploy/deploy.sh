@@ -20,7 +20,9 @@ REGION="${AWS_REGION:-us-east-1}"     # same region as the cluster, so the
                                       # database round trip stays inside it
 FUNCTION="agentmem-api"
 ROLE="agentmem-lambda-role"
-BUCKET="${BUCKET:-agentmem-demo-$(aws sts get-caller-identity --query Account --output text)}"
+GATEWAY="agentmem-gw"
+ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+BUCKET="${BUCKET:-agentmem-demo-$ACCOUNT}"
 
 : "${CRDB_URL:?CRDB_URL is not set. Copy it from the CockroachDB console.}"
 
@@ -65,32 +67,45 @@ else
 fi
 aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
 
-# The page is a different origin from the function, so CORS is not optional.
-# It is deliberately NOT configured on the function URL: when it is, Lambda adds
-# its own headers on top of the ones the handler returns, and two
-# Access-Control-Allow-Origin headers make a browser reject the response. One
-# source of truth, and it is the handler.
-# Creating the URL and making it public are two calls, and a run that dies
-# between them leaves a function URL that answers 403 for ever after -- because
-# the obvious "create it only if absent" guard then skips the second call on
-# every later run. That is a latent failure mode, not an observed one: it was
-# the first hypothesis for a 403 on 2026-08-09 and the policy turned out to be
-# correct all along, so it explained nothing. The guard is still wrong, and the
-# two settings are cheap, so they are asserted on every run.
-if ! aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
-  aws lambda create-function-url-config --function-name "$FUNCTION" --region "$REGION" \
-    --auth-type NONE >/dev/null
+# ---------------------------------------------------------------- gateway ---
+# This used to be a Lambda function URL, because a gateway adds a hop this
+# design does not need. It was replaced on 2026-08-09, and the reason is worth
+# keeping because it is the kind of thing only a deployment teaches:
+#
+#   The function URL answered 403 to every caller, from AWS CloudShell and from
+#   an unrelated network, while AuthType was NONE and the resource policy
+#   carried Principal "*" with the FunctionUrlAuthType NONE condition -- the
+#   exact policy the documentation asks for. Deleting and recreating the URL
+#   changed nothing. CloudWatch settled it: no log event was written for any of
+#   those requests, so the function was never reached and the refusal happened
+#   at the edge. Meanwhile the same function answered 200 to a direct invoke.
+#   The account is six days old and was throttled to zero on Bedrock in every
+#   region on its first day, which is the same shape of restriction; that last
+#   part is a plausible explanation, not a measured one.
+#
+# An HTTP API is one command, needs no code change -- function URLs and HTTP
+# APIs share event payload format 2.0 -- and it answered 200 immediately.
+#
+# CORS stays out of the gateway on purpose. When both the gateway and the
+# handler set Access-Control-Allow-Origin, a browser sees two headers and
+# rejects the response. One source of truth, and it is the handler.
+say "HTTP API"
+API_ID=$(aws apigatewayv2 get-apis --region "$REGION" \
+         --query "Items[?Name=='$GATEWAY'].ApiId | [0]" --output text)
+if [ "$API_ID" = "None" ] || [ -z "$API_ID" ]; then
+  API_ID=$(aws apigatewayv2 create-api --name "$GATEWAY" --protocol-type HTTP \
+           --target "arn:aws:lambda:$REGION:$ACCOUNT:function:$FUNCTION" \
+           --region "$REGION" --query ApiId --output text)
+  echo "created $API_ID"
 else
-  aws lambda update-function-url-config --function-name "$FUNCTION" --region "$REGION" \
-    --auth-type NONE >/dev/null
+  echo "reusing $API_ID"
 fi
 # Already there is a success, not an error: the statement id makes it unique.
 aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
-  --statement-id public-url --action lambda:InvokeFunctionUrl \
-  --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
-API=$(aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" \
-      --query FunctionUrl --output text)
-API="${API%/}"
+  --statement-id apigw-invoke --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:$REGION:$ACCOUNT:$API_ID/*/*" >/dev/null 2>&1 || true
+API="https://$API_ID.execute-api.$REGION.amazonaws.com"
 
 # ------------------------------------------------------------------ site ---
 say "S3 site"
