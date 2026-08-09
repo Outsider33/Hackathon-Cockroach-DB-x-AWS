@@ -26,6 +26,34 @@ BUCKET="${BUCKET:-agentmem-demo-$ACCOUNT}"
 
 : "${CRDB_URL:?CRDB_URL is not set. Copy it from the CockroachDB console.}"
 
+# Set is not the same as usable. A connection string that survives ${VAR:?} and
+# then parses to an empty host deploys perfectly and fails on every request
+# with a UnicodeError out of the idna codec, which names the encoder rather
+# than the mistake. Checked here, where the message can still be useful.
+python3 - "$CRDB_URL" <<'CHECK' || exit 1
+import sys
+from urllib.parse import urlparse
+parsed = urlparse(sys.argv[1])
+problems = []
+if parsed.scheme not in ("postgresql", "postgres"):
+    problems.append(f"scheme is {parsed.scheme!r}, expected postgresql")
+if not parsed.hostname:
+    problems.append("no host -- the string is truncated or is not a URL")
+elif any(not label or len(label) > 63 for label in parsed.hostname.split(".")):
+    problems.append(f"host {parsed.hostname!r} has an empty or over-long label")
+if not parsed.username or not parsed.password:
+    problems.append("no user or no password")
+if (parsed.path or "").lstrip("/").split("?")[0] != "agentmem":
+    problems.append(f"database is {(parsed.path or '').lstrip('/')!r}, expected agentmem")
+if problems:
+    print("CRDB_URL is set but not usable:", file=sys.stderr)
+    for problem in problems:
+        print("  -", problem, file=sys.stderr)
+    print("  length:", len(sys.argv[1]), "characters", file=sys.stderr)
+    sys.exit(1)
+print(f"CRDB_URL parses: {parsed.hostname} / agentmem, {len(sys.argv[1])} characters")
+CHECK
+
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 # ---------------------------------------------------------------- package ---
@@ -51,21 +79,41 @@ ROLE_ARN=$(aws iam get-role --role-name "$ROLE" --query Role.Arn --output text)
 
 # --------------------------------------------------------------- function ---
 say "Lambda"
+
+# JSON on a file rather than the CLI shorthand. Variables={K=V,K2=V2} splits on
+# every comma it meets, so a value containing one arrives truncated, silently,
+# and surfaces much later as a connection error naming an encoder. This
+# connection string happens to contain no comma, which is luck rather than a
+# property of connection strings.
+ENVFILE="$(mktemp)"
+trap 'rm -f "$ENVFILE"' EXIT
+python3 - "$CRDB_URL" "${EMBED_BACKEND:-precomputed}" > "$ENVFILE" <<'ENVJSON'
+import json, sys
+print(json.dumps({"Variables": {"CRDB_URL": sys.argv[1], "EMBED_BACKEND": sys.argv[2]}}))
+ENVJSON
+
 if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
   aws lambda update-function-code --function-name "$FUNCTION" --region "$REGION" \
     --zip-file fileb://dist/function.zip --query LastUpdateStatus --output text
   aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
   aws lambda update-function-configuration --function-name "$FUNCTION" --region "$REGION" \
-    --environment "Variables={CRDB_URL=$CRDB_URL,EMBED_BACKEND=${EMBED_BACKEND:-precomputed}}" \
+    --environment "file://$ENVFILE" \
     --timeout 20 --memory-size 512 --query LastUpdateStatus --output text
 else
   aws lambda create-function --function-name "$FUNCTION" --region "$REGION" \
     --runtime python3.12 --handler handler.lambda_handler --role "$ROLE_ARN" \
     --zip-file fileb://dist/function.zip \
-    --environment "Variables={CRDB_URL=$CRDB_URL,EMBED_BACKEND=${EMBED_BACKEND:-precomputed}}" \
+    --environment "file://$ENVFILE" \
     --timeout 20 --memory-size 512 --query FunctionArn --output text
 fi
 aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
+
+# What the function actually holds now, with the password masked. Deploying a
+# configuration and never looking at it is how the previous run put an
+# unusable connection string on a live function and reported success.
+aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
+  --query 'Environment.Variables.CRDB_URL' --output text \
+  | sed -E 's#(://[^:]+:)[^@]+(@)#\1********\2#'
 
 # ---------------------------------------------------------------- gateway ---
 # This used to be a Lambda function URL, because a gateway adds a hop this
