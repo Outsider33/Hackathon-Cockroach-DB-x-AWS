@@ -114,6 +114,11 @@ things make that safe, and the second took a rewrite to get right.
 **A visitor row expires.** It carries `expires_at` and row-level TTL removes it within the day. The
 engineer's beliefs have no expiry and are never candidates.
 
+That last sentence was an assumption until it was measured, and an unmeasured sweeper is a
+decoration. A row was planted already expired at 06:33:45 UTC on 2026-08-09; the sweep runs on a
+quarter hour, the job was created at 06:45:06 and finished at 06:45:32, and the row was gone.
+Nothing else in the safety argument rests on a claim that has not been run.
+
 **A visitor never mutates an engineer row.** The obvious implementation closes the old belief with
 `UPDATE ... SET valid_to = now()` and inserts the new one. That is not recoverable: TTL deletes
 rows, it does not restore a column it never wrote, so a stranger would have closed a real belief
