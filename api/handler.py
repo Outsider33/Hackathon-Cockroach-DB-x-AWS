@@ -263,6 +263,115 @@ def view_asof(on):
     }
 
 
+def view_unblock(name=None):
+    """What has to be known before a computation can run, and where to read it.
+
+    This is the join the project existed to make and did not make for a week.
+    One half of it answers "what is missing" structurally, over computation,
+    requirement and belief. The other half answers an open question by vector
+    search. Between them sits the question an engineer actually asks -- what do
+    I need to know, and where do I read it -- and answering it means crossing
+    from the structural side to the semantic one in a single query: take the
+    requirements that are not satisfied, take the belief behind each, and
+    search the corpus from where that belief sits.
+
+    The LATERAL is what makes it one query rather than one per gap. There are
+    171 chunks, so the scan is free and the vector index is not needed here;
+    the index earns its place on the open-question path, where the corpus is
+    searched from an arbitrary point.
+    """
+    rows = query(
+        """
+        SELECT c.name        AS computation,
+               c.purpose,
+               c.cost_note,
+               r.belief_key,
+               r.criticality,
+               r.why,
+               b.value        AS known_value,
+               b.status       AS known_status,
+               near.file,
+               near.text,
+               near.distance
+        FROM computation c
+        JOIN requirement r ON r.computation_id = c.id
+        LEFT JOIN current_belief b ON b.key = r.belief_key
+        LEFT JOIN LATERAL (
+            -- Truncated here rather than in Python. Profiled on 2026-08-09:
+            -- the same join without the text came back in 593 ms and with it
+            -- in 1750 ms, so a thousand milliseconds were whole chunks
+            -- crossing the wire to be cut on arrival. That measurement was
+            -- taken from China, where the round trip alone is 273 ms; the
+            -- function runs in the cluster's own region and sees far less.
+            -- Shipping less is free either way.
+            SELECT ch.file, left(ch.text, 340) AS text,
+                   ch.embedding <-> b.embedding AS distance
+            FROM chunk ch
+            WHERE b.embedding IS NOT NULL
+            ORDER BY ch.embedding <-> b.embedding
+            LIMIT 3
+        ) near ON true
+        WHERE b.status IS DISTINCT FROM 'ESTABLISHED'
+          -- Cast, because a bare placeholder in IS NULL has no type to infer
+          -- from and the planner says so rather than guessing.
+          AND (%s::STRING IS NULL OR c.name = %s::STRING)
+        ORDER BY c.name, r.criticality, r.belief_key, near.distance
+        """,
+        (name, name),
+    )
+
+    computations = {}
+    for row in rows:
+        entry = computations.setdefault(row["computation"], {
+            "computation": row["computation"],
+            "purpose": row["purpose"],
+            "cost_note": row["cost_note"],
+            "gaps": {},
+        })
+        gap = entry["gaps"].setdefault(row["belief_key"], {
+            "key": row["belief_key"],
+            "criticality": row["criticality"],
+            "why": row["why"],
+            "status": row["known_status"] or "ABSENT",
+            "value": row["known_value"],
+            "read": [],
+        })
+        if row["distance"] is None:
+            continue
+        distance = float(row["distance"])
+        if distance <= NEAR_ENOUGH:
+            gap["read"].append({
+                "file": row["file"],
+                "text": row["text"],
+                "distance": round(distance, 3),
+                # Cosine, because a reader can put a number on it. For unit
+                # vectors d^2 = 2 - 2cos, and orthogonal is 1.414, not 1.
+                "similarity": round(1 - distance * distance / 2, 2),
+            })
+
+    result = []
+    for entry in computations.values():
+        gaps = list(entry["gaps"].values())
+        for gap in gaps:
+            if not gap["read"]:
+                # Saying the notes are silent is the answer, not the absence of
+                # one. Showing three weak passages instead would be the thing
+                # this whole project is against.
+                gap["note"] = ("Nothing in the indexed notes comes closer than "
+                               f"{NEAR_ENOUGH} to this belief, which is barely "
+                               "better than the corpus average. This is a gap "
+                               "with no reading behind it.")
+        entry["gaps"] = sorted(gaps, key=lambda g: (g["criticality"] != "BLOCKING",
+                                                    g["key"]))
+        entry["blocking_gaps"] = sum(1 for g in gaps if g["criticality"] == "BLOCKING")
+        entry["verdict"] = "BLOCKED" if entry["blocking_gaps"] else "DEGRADED"
+        entry["passages"] = sum(len(g["read"]) for g in gaps)
+        result.append(entry)
+
+    result.sort(key=lambda e: (-e["blocking_gaps"], e["computation"]))
+    return {"view": "unblock", "computations": result, "threshold": NEAR_ENOUGH}
+
+
 # --------------------------------------------------------------------------
 # The semantic road.
 # --------------------------------------------------------------------------
@@ -370,6 +479,17 @@ VISITOR_CEILING = 200
 
 STOPWORDS = {"the", "a", "an", "is", "are", "was", "were", "of", "for", "to",
              "in", "on", "at", "and", "or", "it", "its", "this", "that", "be"}
+
+# How close a passage has to be to a belief before it is worth reading.
+#
+# Measured rather than chosen. A belief compared to all 171 chunks sits at a
+# mean distance of 1.169 with a standard deviation of 0.090, so 0.99 is two
+# standard deviations better than the corpus average. For unit vectors the
+# scale runs 0 to 2 and orthogonal is 1.414, not 1 -- which is worth stating,
+# because reading 1.0 as "unrelated" made a first look at these numbers
+# conclude there was no signal when the retrieval was in fact the strongest in
+# the project.
+NEAR_ENOUGH = 0.99
 
 
 def tokens(text):
@@ -583,9 +703,17 @@ def view_commit(claim):
 # --------------------------------------------------------------------------
 
 STRUCTURAL = [
+    # Ordered, and the order is the point. "what do I need to know to unblock
+    # the FEA run" and "what is blocking the FEA run" are different questions:
+    # the first asks for the reading, the second for the state. Tested first so
+    # the more specific one wins, because "unblock" appears in both.
+    ("unblock", re.compile(
+        r"\b(need to know|what should i read|where do i read|where is it "
+        r"written|how do i unblock|unblock|what would settle|"
+        r"what do i read)\b", re.I)),
     ("missing", re.compile(
         r"\b(missing|blocking|blocked|can .*run|what stops|gap|gaps|"
-        r"ready to run|gate|unblock)\b", re.I)),
+        r"ready to run|gate)\b", re.I)),
     ("revisions", re.compile(
         r"\b(chang\w* (my|its|his|her|their) mind|revision|revised|"
         r"what did i learn|correct\w*|got it wrong|used to think)\b", re.I)),
@@ -610,6 +738,17 @@ def view_ask(question):
     view, arguments = route(question)
     if view == "missing":
         payload = view_missing()
+    elif view == "unblock":
+        # A computation named in the question narrows it; otherwise every
+        # blocked one is answered, which is the useful default on a Monday.
+        named = re.search(r"\b(fea_run|bolt_check|scrub_recompute|"
+                          r"rod_end_boss_sizing|unsprung_mass_budget|"
+                          r"fatigue_check_parent|fatigue_check_welded)\b",
+                          question, re.I)
+        if not named and re.search(r"\bfea\b|finite element", question, re.I):
+            payload = view_unblock("fea_run")
+        else:
+            payload = view_unblock(named.group(1).lower() if named else None)
     elif view == "revisions":
         payload = view_revisions()
     elif view == "asof":
@@ -642,6 +781,7 @@ def view_health():
 ROUTES = {
     "health": lambda p: view_health(),
     "missing": lambda p: view_missing(),
+    "unblock": lambda p: view_unblock(p.get("computation")),
     "revisions": lambda p: view_revisions(),
     "asof": lambda p: view_asof(p.get("on")),
     "search": lambda p: view_search(p.get("q", "")),

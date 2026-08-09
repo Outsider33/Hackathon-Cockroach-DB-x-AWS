@@ -170,6 +170,62 @@ purge()
 check("counts are back where they started", counts(), start)
 check("fea_run is blocked again", verdict_of("fea_run"), (was_verdict, was_gaps))
 
+# ----------------------------------------------------------------- unblock --
+
+print("\nwhere to read")
+
+unblock = handler.view_unblock("fea_run")
+check("only the named computation comes back",
+      [c["computation"] for c in unblock["computations"]], ["fea_run"])
+
+fea = unblock["computations"][0]
+check("both blocking gaps are reported", fea["blocking_gaps"], 2)
+check("the corpus was actually searched", fea["passages"] > 0, True)
+
+hub = [g for g in fea["gaps"] if g["key"] == "hub_barrel_architecture"][0]
+check("the nearest passage is under the threshold",
+      hub["read"][0]["distance"] <= handler.NEAR_ENOUGH, True)
+# The scale runs 0 to 2 and orthogonal is 1.414, which is why a distance near
+# 1.0 is a real match and reading it as "unrelated" is a mistake this project
+# made once already.
+check("similarity is the cosine, not the distance",
+      abs(hub["read"][0]["similarity"]
+          - round(1 - hub["read"][0]["distance"] ** 2 / 2, 2)) < 0.011, True)
+check("the passage comes from the notes about the hub barrel",
+      hub["read"][0]["file"], "CAD_Pipeline/REPRISE.md")
+
+# Silence is an answer. bolt_check is blocked on a belief the notes never
+# discuss, and showing three weak passages instead would be the thing this
+# whole project argues against.
+silent = [g for c in handler.view_unblock()["computations"] for g in c["gaps"]
+          if not g["read"]]
+check("a gap with no reading says so rather than showing noise",
+      bool(silent) and all("note" in g for g in silent), True)
+
+check("every returned passage is under the threshold",
+      all(p["distance"] <= handler.NEAR_ENOUGH
+          for c in handler.view_unblock()["computations"]
+          for g in c["gaps"] for p in g["read"]), True)
+
+check("text is truncated in SQL, not shipped whole",
+      max(len(p["text"]) for c in handler.view_unblock()["computations"]
+          for g in c["gaps"] for p in g["read"]) <= 340, True)
+
+print("\nrouting")
+for question, expected in [
+    ("what do I need to know to unblock the FEA run", "unblock"),
+    ("where do I read about the mesh", "unblock"),
+    ("what is blocking the FEA run", "missing"),
+    ("what changed my mind", "revisions"),
+    ("what did I believe on 2026-07-30", "asof"),
+    ("why did the part get thicker", "search"),
+]:
+    check(f"{expected:9s} <- {question}", handler.route(question)[0], expected)
+
+check("every belief has a vector",
+      handler.query("SELECT count(*) AS n FROM belief WHERE embedding IS NULL")[0]["n"],
+      0)
+
 # ------------------------------------------------------------------ routing --
 
 print("\nHTTP")

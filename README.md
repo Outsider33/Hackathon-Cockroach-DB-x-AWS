@@ -70,6 +70,44 @@ carries its evidence in a `NOT NULL` column, because a revision without evidence
 and not learning. Time travel stays as a safety net for the last 75 minutes, which is what it is
 good at.
 
+## What do I need to know, and where do I read it
+
+For a week this project had two halves that never spoke. One answers *what is missing* with a join
+over computation, requirement and belief: exact, structural, and it names a gap without helping you
+close it. The other answers an open question by searching the corpus: useful, and it has no idea
+what you are blocked on.
+
+Between them sits the question an engineer actually asks on a Monday, and it needs both:
+
+```
+what do I need to know to unblock the FEA run
+
+fea_run   BLOCKED · costs about 2 hours · 6 passages to read
+  hub_barrel_architecture   BLOCKING   UNDECIDABLE
+      REPRISE.md              similarity 0.58   "6. Reste ouvert, par ordre de rendement
+                                                 1. Fût de moyeu ..."
+      RECHERCHE_27-30.md      similarity 0.54   "2.1 SKF Hub Bearing Unit ..."
+  mesh_independence         BLOCKING   UNDECIDABLE
+      REPRISE.md              similarity 0.53   "3.4 La boucle de dimensionnement
+                                                 convergeait sur le MAUVAIS critère"
+```
+
+One query. The join finds the gaps, then a `LATERAL` vector search reads the corpus **from where
+each belief sits** — which is why beliefs carry an embedding of their own, in the same 384
+dimensional space as the chunks. Cross-lingual on the way: the questions are English and the notes
+are French.
+
+**And it says when the notes are silent.** `bolt_check` is blocked on a belief nothing in the
+corpus discusses, so it reports that rather than showing three weak passages. The threshold is
+measured, not chosen: a belief compared against all 171 chunks sits at a mean distance of 1.169
+with a standard deviation of 0.090, so 0.99 is two standard deviations better than the corpus
+average, and anything above it is noise wearing a rank.
+
+*A note on the scale, because getting it wrong sent this feature to the bin for ten minutes. These
+are L2 distances between unit vectors, so the range is 0 to 2 and orthogonal is 1.414, not 1. A
+distance of 0.91 is a cosine of 0.58. Read 1.0 as "unrelated" and the best retrieval in the project
+looks like noise.*
+
 ## Telling it something, and being refused
 
 A memory nobody can correct is a log. So the demo takes a claim and the agent answers one of three
@@ -229,6 +267,7 @@ export CRDB_URL='postgresql://<user>:<password>@<host>:26257/agentmem?sslmode=ve
 psql "$CRDB_URL" -f sql/schema.sql
 psql "$CRDB_URL" -f sql/seed.sql
 psql "$CRDB_URL" -f sql/migration_002_visitor_writes.sql
+psql "$CRDB_URL" -f sql/migration_003_belief_vectors.sql
 psql "$CRDB_URL" -f sql/queries.sql
 ```
 
@@ -246,6 +285,7 @@ Then the corpus:
 ```bash
 pip install --quiet pg8000            # pure Python, nothing to compile
 python3 ingest/embed_and_load.py --reset
+python3 ingest/embed_beliefs.py       # a vector per belief, and the stored questions
 python3 ingest/embed_and_load.py --search "why did the part get thicker"
 ```
 
@@ -272,6 +312,8 @@ be handed to anyone.
 | Vector search, including French corpus against English questions | done |
 | Bedrock embeddings | written, blocked on account quota, remeasured across four regions on 2026-08-09 |
 | Agent loop that proposes, refuses, or writes a revision | done, six decision paths verified against the live cluster |
+| Where to read: structural gaps joined to the corpus | done, one query, threshold measured against the corpus average |
+| Tests | `python3 tests/test_agent.py`, 45 checks against the live cluster |
 | Public writes bounded by row-level TTL | done |
 | Demo application, S3 and Lambda behind an HTTP API | live |
 
