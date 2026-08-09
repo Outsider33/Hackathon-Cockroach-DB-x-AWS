@@ -2,8 +2,9 @@
 # Deploy the demo: one Lambda behind a Function URL, one S3 static site.
 #
 # Run it in AWS CloudShell. Credentials are already there, which is the point:
-# no access key ever lands on the laptop, and the database password reaches the
-# function as an environment variable set from a shell that is not recorded.
+# no access key and no database password ever land in the repository, and the
+# password reaches the function as an environment variable set from a shell
+# whose history is not committed.
 #
 #   export CRDB_URL='postgresql://...'      # copied from the CockroachDB console
 #   git clone https://github.com/Outsider33/Hackathon-Cockroach-DB-x-AWS.git
