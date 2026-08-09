@@ -274,6 +274,17 @@ check("a GET cannot reach the write route",
       405)
 check("an unknown view is a 400",
       call("GET", {"view": "nope"})["statusCode"], 400)
+# A view reporting a bad argument is answering, not failing. It used to come
+# back 200 with an error field, and the page then told the visitor the API had
+# not answered -- blaming the server for a mistyped date.
+check("a bad date is a 400, not a 200 with an error inside",
+      call("GET", {"view": "asof", "on": "yesterday"})["statusCode"], 400)
+check("and a good date is still a 200",
+      call("GET", {"view": "asof", "on": "2026-07-30"})["statusCode"], 200)
+check("a view that answers normally is never a 400",
+      [call("GET", {"view": v})["statusCode"]
+       for v in ("health", "missing", "revisions", "unblock", "timetravel")],
+      [200, 200, 200, 200, 200])
 check("a preflight is answered", call("OPTIONS")["statusCode"], 204)
 check("health answers", call("GET", {"view": "health"})["statusCode"], 200)
 check("a POST with a body that is not JSON is a 400",

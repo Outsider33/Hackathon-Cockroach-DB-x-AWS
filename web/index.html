@@ -424,7 +424,16 @@ async function ask(question) {
   $("out").innerHTML = `<p class="spin">asking&hellip;</p>`;
   try {
     const { body } = await api({ view: "ask", q: question });
-    if (body.error) throw new Error(body.error);
+    // An error inside the body is the API answering that the question was
+    // wrong. Only a thrown fetch is the API not answering, and telling a
+    // visitor otherwise blames the server for their typo.
+    if (body.error) {
+      $("out").innerHTML = `<div class="card"><p class="notice">
+        ${escape(body.error)}</p>${body.wanted_shape
+          ? `<p class="why">expected: ${escape(body.wanted_shape)}</p>` : ""}</div>`;
+      $("go").disabled = false;
+      return;
+    }
     const render = RENDER[body.view];
     $("route").innerHTML = `<div class="route">${ROUTE_NOTE[body.view] || ""}
       &nbsp; <span style="opacity:.6">${body.elapsed_ms} ms</span></div>`;

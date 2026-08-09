@@ -968,7 +968,11 @@ def lambda_handler(event, context):
             "ms": int((time.time() - started) * 1000),
             "request_id": getattr(context, "aws_request_id", None),
         }))
-        return respond(200, payload, started)
+        # A view that reports a bad argument was answering, not failing, and
+        # the status code should say which. It used to return 200 with an
+        # error field, and the page then told the visitor the API had not
+        # answered -- blaming the server for a mistyped date.
+        return respond(400 if "error" in payload else 200, payload, started)
     except Exception as error:
         print(json.dumps({
             "view": view,
