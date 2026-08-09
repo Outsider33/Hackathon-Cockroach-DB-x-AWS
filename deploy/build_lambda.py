@@ -21,8 +21,17 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "dist" / "build"
 ZIP = ROOT / "dist" / "function.zip"
 
-# Nothing here would break the function, but every megabyte is cold start.
-JUNK = ("*.dist-info", "*.egg-info", "__pycache__", "bin", "*.pyc")
+# The .dist-info directories are NOT junk, whatever their name suggests. scramp,
+# which pg8000 pulls in for SCRAM authentication, reads its own version through
+# importlib.metadata at import time, and metadata lives in .dist-info. Deleting
+# them produced a function that could not even be imported:
+#
+#   Unable to import module 'handler': No package metadata was found for scramp
+#
+# Measured on 2026-08-09 on the deployed function, after this script had claimed
+# in a comment that nothing it deleted would break anything. They weigh a few
+# kilobytes; the cold start argument never applied to them.
+JUNK = ("__pycache__", "bin", "*.pyc")
 
 
 def main():
