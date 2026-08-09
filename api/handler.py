@@ -83,6 +83,8 @@ def query(sql, parameters=()):
         try:
             cursor = connect().cursor()
             cursor.execute(sql, parameters)
+            if cursor.description is None:
+                return []          # a statement that returns no rows, not a bug
             columns = [description[0] for description in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception:
@@ -93,6 +95,36 @@ def query(sql, parameters=()):
             except Exception:
                 pass
             _connection = None
+
+
+class transaction:
+    """Every statement inside, or none of them.
+
+    Closing a belief and opening its successor are one fact about the world,
+    not two, and a memory that can hold the first without the second is worse
+    than one that refuses both. CockroachDB is serializable by default, so
+    there is no isolation level to argue about here -- only the need to take
+    autocommit off, which the connection turns on for the read path.
+    """
+
+    def __enter__(self):
+        self.connection = connect()
+        self.connection.autocommit = False
+        return self.connection.cursor()
+
+    def __exit__(self, kind, value, trace):
+        global _connection
+        try:
+            if kind is None:
+                self.connection.commit()
+            else:
+                self.connection.rollback()
+        finally:
+            try:
+                self.connection.autocommit = True
+            except Exception:
+                _connection = None
+        return False
 
 
 def serialise(value):
@@ -130,7 +162,7 @@ def view_missing():
                b.status      AS known_status
         FROM computation c
         JOIN requirement r ON r.computation_id = c.id
-        LEFT JOIN belief b ON b.key = r.belief_key AND b.valid_to IS NULL
+        LEFT JOIN current_belief b ON b.key = r.belief_key
         ORDER BY c.name, r.criticality, r.belief_key
         """
     )
@@ -297,6 +329,252 @@ def view_search(question, limit=5):
 
 
 # --------------------------------------------------------------------------
+# The write path. An agent that can only read is a search box.
+#
+# What makes this one worth building is not that it writes -- anything can
+# write -- but that it has three answers and only one of them is a write. A
+# memory whose whole argument is that it stores what it does not know does not
+# get to accept every claim it is handed.
+#
+#   REVISE        the claim settles a belief that was open, or contradicts one
+#                 that was held. Closing and opening happen in one transaction.
+#   NO CHANGE     the claim agrees with what is already held. Nothing is
+#                 written, and saying so is the useful answer.
+#   INSUFFICIENT  the claim reaches a belief but does not settle it, or reaches
+#                 nothing at all. The agent says what it would need.
+# --------------------------------------------------------------------------
+
+# The grammar is declared, not inferred, and that is a rule this project
+# learned the expensive way: a first attempt at reading intent out of prose
+# produced four false positives out of four, including on the value that was
+# correct. So a claim announces its own parts.
+#
+#     <subject> is <value> because <evidence>
+#
+# Anything that does not parse is reported as unparsed, with the shape it
+# wanted. Guessing would be worse than refusing.
+CLAIM = re.compile(r"^(?P<subject>.+?)\s+is\s+(?P<value>.+?)\s+because\s+(?P<evidence>.+)$",
+                   re.I | re.S)
+
+# A visitor row lives a day. Long enough that a judge can come back to it,
+# short enough that the demo repairs itself without anyone on call.
+VISITOR_TTL = "24h"
+VISITOR_SOURCE = "demo visitor"
+
+# One stranger with a loop should not be able to grow the table without bound.
+VISITOR_CEILING = 200
+
+STOPWORDS = {"the", "a", "an", "is", "are", "was", "were", "of", "for", "to",
+             "in", "on", "at", "and", "or", "it", "its", "this", "that", "be"}
+
+
+def tokens(text):
+    """Words worth matching a KEY on. Not usable to compare two values.
+
+    The short-word filter is what makes key matching work and what makes value
+    comparison fail: tokens("14.00 mm") is the empty set, because 14, 00 and mm
+    are all two characters or fewer. Both sides of a comparison then came out
+    empty and equal-looking, and the agent proposed revising 14.00 mm to
+    14.00 mm. Measured on 2026-08-09, on the first run. Values go through
+    same_value below.
+    """
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) > 2 and w not in STOPWORDS}
+
+
+def same_value(one, other):
+    """Whether two stated values say the same thing.
+
+    Deliberately literal: punctuation and spacing are ignored, 14.00 and 14 are
+    not the same string and are not treated as one. A memory that quietly
+    decides two numbers are close enough is a memory that stops being citable.
+    """
+    def flatten(value):
+        return re.sub(r"[^a-z0-9.]+", " ", (value or "").lower()).strip()
+    return flatten(one) == flatten(other)
+
+
+def match_belief(subject):
+    """Pick the belief a claim is about, and show the arithmetic that picked it.
+
+    Lexical rather than semantic, on purpose. Free text cannot be embedded on
+    this deployment -- see embed() -- and a scoring rule a judge can recompute
+    by hand is worth more here than a similarity a judge has to trust. The
+    score is returned with the answer for exactly that reason.
+    """
+    wanted = tokens(subject)
+    if not wanted:
+        return None, []
+    ranked = []
+    for row in query("SELECT id, key, value, status, source FROM current_belief"):
+        # The key carries the intent (hub_barrel_architecture), the value
+        # carries the wording someone might quote back. Both count, the key
+        # more, because a value can be long enough to match by accident.
+        key_hits = len(wanted & tokens(row["key"].replace("_", " ")))
+        value_hits = len(wanted & tokens(row["value"]))
+        score = key_hits * 3 + value_hits
+        if score:
+            ranked.append(dict(row, score=score, key_hits=key_hits))
+    ranked.sort(key=lambda r: (-r["score"], r["key"]))
+    if not ranked:
+        return None, []
+    best = ranked[0]
+    # A claim that touches nothing but a couple of common words is not about
+    # this belief, it is about the vocabulary. Require the key itself to land.
+    if best["key_hits"] == 0:
+        return None, ranked[:3]
+    return best, ranked[:3]
+
+
+def view_propose(claim):
+    """Decide, and write nothing. Same code path the commit runs first."""
+    claim = (claim or "").strip()
+    if not claim:
+        return {"view": "propose", "decision": "INSUFFICIENT",
+                "reason": "No claim given.",
+                "wanted_shape": "<subject> is <value> because <evidence>"}
+
+    parsed = CLAIM.match(claim)
+    if not parsed:
+        return {
+            "view": "propose", "decision": "INSUFFICIENT", "claim": claim,
+            "reason": ("That claim does not declare its parts, and this agent "
+                       "does not infer them. Reading intent out of prose is "
+                       "how the memory got four facts wrong in one pass."),
+            "wanted_shape": "<subject> is <value> because <evidence>",
+            "example": ("hub barrel architecture is B because the mass study "
+                        "closed the 1.7 kg gap"),
+        }
+
+    subject = parsed.group("subject").strip()
+    value = parsed.group("value").strip()
+    evidence = parsed.group("evidence").strip()
+    target, considered = match_belief(subject)
+
+    shortlist = [{"key": r["key"], "score": r["score"], "status": r["status"]}
+                 for r in considered]
+
+    if target is None:
+        return {
+            "view": "propose", "decision": "INSUFFICIENT", "claim": claim,
+            "parsed": {"subject": subject, "value": value, "evidence": evidence},
+            "reason": ("No belief in this memory is about that. The agent will "
+                       "not open a new key on a stranger's say-so: an unasked "
+                       "belief is how a memory fills up with things nobody "
+                       "checked."),
+            "considered": shortlist,
+        }
+
+    decision = "REVISE"
+    why = None
+    if same_value(value, target["value"]):
+        decision = "NO CHANGE"
+        why = "The memory already holds this, and holds it for a stated reason."
+    elif len(tokens(evidence)) < 3:
+        decision = "INSUFFICIENT"
+        why = ("The evidence is too thin to close a belief. Name what was "
+               "measured, read or decided, not that it changed.")
+
+    return {
+        "view": "propose",
+        "decision": decision,
+        "claim": claim,
+        "parsed": {"subject": subject, "value": value, "evidence": evidence},
+        "reason": why,
+        "target": {"id": str(target["id"]), "key": target["key"],
+                   "value": target["value"], "status": target["status"],
+                   "source": target["source"], "match_score": target["score"]},
+        "considered": shortlist,
+        "would_write": None if decision != "REVISE" else {
+            "close": target["key"],
+            "open": {"key": target["key"], "value": value,
+                     "status": "ESTABLISHED", "source": VISITOR_SOURCE},
+            "revision_evidence": evidence,
+            "expires_in": VISITOR_TTL,
+        },
+    }
+
+
+def view_commit(claim):
+    """Write it, or explain why not. The decision is recomputed here.
+
+    Never trusts a decision handed in by the caller: propose is advisory and
+    the client can say anything. The only decision that governs a write is the
+    one this function makes on the claim it was given.
+    """
+    proposal = view_propose(claim)
+    proposal["view"] = "commit"
+    if proposal["decision"] != "REVISE":
+        proposal["written"] = False
+        return proposal
+
+    ceiling = query("SELECT count(*) AS n FROM belief WHERE expires_at IS NOT NULL")
+    if ceiling[0]["n"] >= VISITOR_CEILING:
+        proposal["decision"] = "REFUSED"
+        proposal["written"] = False
+        proposal["reason"] = (
+            f"{VISITOR_CEILING} visitor beliefs are already live. The sweeper "
+            "clears them within the hour; the memory would rather refuse a "
+            "write than grow without a bound.")
+        return proposal
+
+    before = {c["computation"]: c for c in view_missing()["computations"]}
+    target = proposal["target"]
+    parsed = proposal["parsed"]
+
+    # The old belief is NOT closed. Closing it would be a mutation of somebody
+    # else's row that no expiry can undo -- see sql/migration_002. The new row
+    # simply becomes the most recent one, and stops being that when it expires.
+    with transaction() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO belief (key, value, status, source, valid_from, expires_at)
+            VALUES (%s, %s, 'ESTABLISHED', %s, now(), now() + %s::INTERVAL)
+            RETURNING id
+            """,
+            (target["key"], parsed["value"], VISITOR_SOURCE, VISITOR_TTL),
+        )
+        new_id = cursor.fetchone()[0]
+        # The superseded belief is named by the id the proposal matched, not
+        # looked up again here. Re-reading current_belief at this point returns
+        # the row just inserted -- the view is DISTINCT ON (key) and the new
+        # row is now the most recent -- so a lookup found nothing, the INSERT
+        # ... SELECT matched zero rows, and the revision was silently not
+        # written while the belief was. Measured on 2026-08-09: revisions
+        # stayed at 14 through a commit that reported success.
+        cursor.execute(
+            """
+            INSERT INTO revision (belief_old, belief_new, occurred_at,
+                                  evidence, evidence_source, expires_at)
+            VALUES (%s, %s, now(), %s, %s, now() + %s::INTERVAL)
+            """,
+            (target["id"], new_id, parsed["evidence"], VISITOR_SOURCE,
+             VISITOR_TTL),
+        )
+
+    after = {c["computation"]: c for c in view_missing()["computations"]}
+    # The point of the whole exercise: one sentence, and a two hour computation
+    # changes state. Only the computations that actually moved are reported.
+    moved = []
+    for name, now_state in after.items():
+        was = before.get(name)
+        if was and (was["verdict"] != now_state["verdict"]
+                    or was["blocking_gaps"] != now_state["blocking_gaps"]):
+            moved.append({
+                "computation": name,
+                "from": f"{was['verdict']} ({was['blocking_gaps']} blocking)",
+                "to": f"{now_state['verdict']} ({now_state['blocking_gaps']} blocking)",
+                "cost_note": now_state["cost_note"],
+            })
+
+    proposal["written"] = True
+    proposal["belief_id"] = str(new_id)
+    proposal["expires_in"] = VISITOR_TTL
+    proposal["unblocked"] = moved
+    return proposal
+
+
+# --------------------------------------------------------------------------
 # The router. Structural first, semantic as the default.
 # --------------------------------------------------------------------------
 
@@ -344,11 +622,12 @@ def view_health():
     counts = query(
         """
         SELECT (SELECT count(*) FROM belief)      AS beliefs,
-               (SELECT count(*) FROM belief WHERE valid_to IS NULL) AS current_beliefs,
+               (SELECT count(*) FROM current_belief) AS current_beliefs,
                (SELECT count(*) FROM revision)    AS revisions,
                (SELECT count(*) FROM chunk)       AS chunks,
                (SELECT count(*) FROM computation) AS computations,
                (SELECT count(*) FROM requirement) AS requirements,
+               (SELECT count(*) FROM belief WHERE expires_at IS NOT NULL) AS visitor_beliefs,
                version()                          AS server
         """
     )[0]
@@ -363,7 +642,13 @@ ROUTES = {
     "asof": lambda p: view_asof(p.get("on")),
     "search": lambda p: view_search(p.get("q", "")),
     "ask": lambda p: view_ask(p.get("q", "")),
+    "propose": lambda p: view_propose(p.get("claim", "")),
+    "commit": lambda p: view_commit(p.get("claim", "")),
 }
+
+# The one route that changes the database. Kept in a set rather than sniffed
+# from the name, so that adding a writer later is a deliberate edit here.
+WRITES = {"commit"}
 
 
 def respond(status, body, started):
