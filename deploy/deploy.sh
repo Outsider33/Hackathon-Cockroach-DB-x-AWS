@@ -73,8 +73,10 @@ aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
 # Creating the URL and making it public are two calls, and a run that dies
 # between them leaves a function URL that answers 403 for ever after -- because
 # the obvious "create it only if absent" guard then skips the second call on
-# every later run. Measured on 2026-08-09. So the two settings are asserted
-# every time instead of being guarded by the existence of the first one.
+# every later run. That is a latent failure mode, not an observed one: it was
+# the first hypothesis for a 403 on 2026-08-09 and the policy turned out to be
+# correct all along, so it explained nothing. The guard is still wrong, and the
+# two settings are cheap, so they are asserted on every run.
 if ! aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
   aws lambda create-function-url-config --function-name "$FUNCTION" --region "$REGION" \
     --auth-type NONE >/dev/null
