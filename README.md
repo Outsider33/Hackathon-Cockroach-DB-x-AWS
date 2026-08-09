@@ -70,6 +70,65 @@ carries its evidence in a `NOT NULL` column, because a revision without evidence
 and not learning. Time travel stays as a safety net for the last 75 minutes, which is what it is
 good at.
 
+## Telling it something, and being refused
+
+A memory nobody can correct is a log. So the demo takes a claim and the agent answers one of three
+ways, and only one of them writes:
+
+| answer | when |
+|---|---|
+| `REVISE` | the claim settles a belief that was open, or contradicts one that was held |
+| `NO CHANGE` | the memory already holds this, for a stated reason |
+| `INSUFFICIENT` | the claim reaches a belief but does not settle it, or reaches nothing at all |
+
+The third one is the part worth building. A memory whose argument is that it stores what it does
+not know does not get to accept every claim it is handed.
+
+A claim declares its parts rather than having them inferred:
+
+```
+hub barrel architecture is B because the mass study closed the 1.7 kg gap
+      subject                 value              evidence
+```
+
+That is not a shortcut around parsing. An earlier attempt in this codebase at reading intent out of
+prose returned four false positives out of four, including on the value that happened to be right.
+A claim that does not parse is reported as unparsed, with the shape it wanted.
+
+Matching a subject to a belief is lexical, and the score is shown on screen. Free text cannot be
+embedded on this deployment, and in exchange the rule is one a reader can recompute by hand instead
+of a similarity they would have to take on faith.
+
+Then the part that makes it worth watching. Beliefs are joined to the computations that need them,
+so a sentence moves a two-hour job:
+
+```
+fea_run     BLOCKED (2 blocking)  ->  BLOCKED (1 blocking)      costs about 2 hours
+```
+
+### A public write endpoint that cannot damage the memory
+
+The demo is open and unauthenticated, which is the only way a judge can actually try it. Three
+things make that safe, and the second took a rewrite to get right.
+
+**A visitor row expires.** It carries `expires_at` and row-level TTL removes it within the day. The
+engineer's beliefs have no expiry and are never candidates.
+
+**A visitor never mutates an engineer row.** The obvious implementation closes the old belief with
+`UPDATE ... SET valid_to = now()` and inserts the new one. That is not recoverable: TTL deletes
+rows, it does not restore a column it never wrote, so a stranger would have closed a real belief
+for good. A visitor therefore only inserts, and *current* stops meaning `valid_to IS NULL` and
+starts meaning *held most recently* — resolved once, in a view. When the visitor row expires, the
+engineer's row is current again by arithmetic rather than by repair.
+
+**The revision goes with the belief it created.** The foreign keys were created without
+`ON DELETE CASCADE`, which would have made the first sweep against a cited belief fail quietly, in
+the background, days later.
+
+The belief and the revision that explains it are written in one transaction. Closing a belief and
+opening its successor are one fact about the world, and a memory that can hold the first without
+the second is worse than one that refuses both.
+
 ## The data is real, and it is unflattering
 
 None of the seed data is invented. Fourteen revisions, all from dated logs, all moments where the
@@ -113,6 +172,14 @@ tells you which of those I was unsure about.
 |---|---|
 | Cloud managed MCP server | the whole schema and dataset were created through it, from the agent session, with no local client |
 | Distributed vector indexing | semantic search over the corpus, declared inline on an empty table |
+
+Two further CockroachDB features carry the write path. They are not on the list of four eligible
+tools and are not counted as such here:
+
+| feature | what it holds up |
+|---|---|
+| Row-level TTL | a public write endpoint that returns to its reference state on its own, with nobody on call |
+| Serializable transactions, by default | the belief and the revision that explains it are written together or not at all, with no isolation level to argue about |
 
 **AWS**: the demo is deployed on **S3 and Lambda**. **Amazon Bedrock** is implemented for
 embeddings and is not what generated the vectors currently in the database, which is worth
@@ -187,9 +254,10 @@ be handed to anyone.
 | Schema, seed data, queries | done, verified by running them on 2026-08-04 |
 | Corpus ingestion, 171 chunks, 18 anchored to a belief | done, local backend |
 | Vector search, including French corpus against English questions | done |
-| Bedrock embeddings | written, blocked on account quota |
-| Agent loop that proposes a revision | in progress |
-| Demo application on S3 and Lambda | in progress |
+| Bedrock embeddings | written, blocked on account quota, remeasured across four regions on 2026-08-09 |
+| Agent loop that proposes, refuses, or writes a revision | done, six decision paths verified against the live cluster |
+| Public writes bounded by row-level TTL | done |
+| Demo application, S3 and Lambda behind an HTTP API | live |
 
 ## License
 
