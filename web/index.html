@@ -94,6 +94,39 @@
   .notice { color: var(--unknown); font-size: 13.5px; }
   .notice + .chips { margin-top: 12px; }
 
+  .tell { margin: 38px 0 0; padding-top: 26px; border-top: 1px solid var(--line); }
+  .tell h2 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  .tell > p { margin: 0 0 14px; color: var(--dim); font-size: 13.5px; max-width: 68ch; }
+  .tell code { font-family: var(--mono); font-size: 12.5px; color: var(--accent); }
+
+  .decision {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em;
+    padding: 2px 8px; border-radius: 4px; float: right;
+  }
+  .decision.REVISE       { color: var(--ok);      background: rgba(127,176,105,0.12); }
+  .decision.NOCHANGE     { color: var(--accent);  background: rgba(110,168,254,0.12); }
+  .decision.INSUFFICIENT { color: var(--unknown); background: rgba(217,164,65,0.12); }
+  .decision.REFUSED      { color: var(--blocked); background: rgba(224,108,117,0.12); }
+
+  .parsed { font-family: var(--mono); font-size: 12.5px; margin: 10px 0 0; }
+  .parsed span { color: var(--dim); }
+  .shortlist { font-family: var(--mono); font-size: 11.5px; color: var(--dim); margin-top: 10px; }
+  .shortlist b { color: var(--text); font-weight: 500; }
+  .moved {
+    margin-top: 12px; padding: 10px 12px; border-radius: 6px;
+    background: rgba(127,176,105,0.09); border: 1px solid rgba(127,176,105,0.25);
+    font-size: 13.5px;
+  }
+  .moved .cost { color: var(--dim); font-family: var(--mono); font-size: 11.5px; }
+  .commit { margin-top: 12px; }
+  .commit button {
+    background: var(--ok); color: #0d0f12; border: 0; padding: 8px 16px;
+    border-radius: 7px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+    font-family: inherit;
+  }
+  .commit button:disabled { opacity: .5; cursor: default; }
+  .ttl { color: var(--dim); font-size: 12.5px; margin-top: 8px; }
+
   footer {
     margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line);
     font-family: var(--mono); font-size: 12px; color: var(--dim);
@@ -133,6 +166,33 @@
 
 <div id="route"></div>
 <div id="out"></div>
+
+<section class="tell">
+  <h2>Now tell it something</h2>
+  <p>
+    The agent reads a claim, finds the belief it touches, and answers one of three ways: it
+    revises, it says the memory already holds that, or it refuses and says what it would need.
+    A claim declares its parts &mdash; <code>&lt;subject&gt; is &lt;value&gt; because
+    &lt;evidence&gt;</code> &mdash; because inferring them out of prose is how this memory once
+    got four facts wrong in a single pass. What you write here expires within a day; what the
+    engineer wrote does not.
+  </p>
+
+  <div class="ask">
+    <input id="claim" autocomplete="off" spellcheck="false"
+           placeholder="hub barrel architecture is B because the mass study closed the 1.7 kg gap">
+    <button id="propose">Propose</button>
+  </div>
+
+  <div class="chips" id="claims">
+    <button>hub barrel architecture is B because the mass study closed the 1.7 kg gap</button>
+    <button>part thickness is 14.00 mm because the tensor fatigue run measured it</button>
+    <button>I think the hub barrel should probably be B</button>
+    <button>the coffee machine is broken because nobody cleaned it</button>
+  </div>
+
+  <div id="verdict"></div>
+</section>
 
 <footer>
   <span id="server">&nbsp;</span>
@@ -263,23 +323,103 @@ function run() {
 
 $("go").onclick = run;
 $("q").onkeydown = (event) => { if (event.key === "Enter") run(); };
+
+// ---- the write path ----------------------------------------------------
+
+function renderVerdict(data, committed) {
+  const badge = data.decision.replace(/\s+/g, "");
+  const p = data.parsed;
+  const parsed = p ? `<p class="parsed">
+      <span>subject</span> ${escape(p.subject)}
+      &nbsp;<span>value</span> ${escape(p.value)}
+      &nbsp;<span>because</span> ${escape(p.evidence)}</p>` : "";
+  const target = data.target ? `<p class="why" style="margin-top:10px">
+      matched <b style="font-family:var(--mono)">${escape(data.target.key)}</b>,
+      held as <span class="status ${escape(data.target.status)}">${escape(data.target.status)}</span>
+      ${escape(data.target.value)}</p>` : "";
+  // The score is shown because the matcher is lexical and a judge should be
+  // able to recompute it, rather than take a similarity on faith.
+  const shortlist = (data.considered || []).length ? `<p class="shortlist">
+      considered: ${data.considered.map((c) =>
+        `<b>${escape(c.key)}</b> ${c.score}`).join(" &nbsp; ")}</p>` : "";
+  const reason = data.reason ? `<p class="why" style="margin-top:8px">${escape(data.reason)}</p>` : "";
+  const shape = data.wanted_shape
+    ? `<p class="shortlist">wanted shape: <b>${escape(data.wanted_shape)}</b></p>` : "";
+
+  let tail = "";
+  if (committed) {
+    const moved = (data.unblocked || []).map((m) => `
+      <div class="moved"><b>${escape(m.computation)}</b>
+        &nbsp;${escape(m.from)} <span class="arrow">&rarr;</span> ${escape(m.to)}
+        <div class="cost">costs ${escape(m.cost_note)}</div></div>`).join("");
+    tail = moved + `<p class="ttl">Written, and it expires in ${escape(data.expires_in)}.
+      The engineer's beliefs have no expiry, and none of them was modified.</p>`;
+  } else if (data.decision === "REVISE") {
+    tail = `<div class="commit"><button id="docommit">Commit this revision</button></div>
+            <p class="ttl">One transaction: the new belief and the revision that explains it.
+            It will expire in ${escape(data.would_write.expires_in)}.</p>`;
+  }
+
+  return `<div class="card">
+      <span class="decision ${escape(badge)}">${escape(data.decision)}</span>
+      <h3>${committed ? "written" : "proposed"}</h3>
+      ${parsed}${target}${reason}${shape}${shortlist}${tail}
+    </div>`;
+}
+
+async function decide(view) {
+  const claim = $("claim").value.trim();
+  if (!claim) return;
+  $("propose").disabled = true;
+  $("verdict").innerHTML = `<p class="spin">${view === "commit" ? "writing" : "reading"}&hellip;</p>`;
+  try {
+    const { body } = await api({ view, claim });
+    if (body.error) throw new Error(body.error);
+    $("verdict").innerHTML = renderVerdict(body, view === "commit");
+    if (view === "commit") refreshStats();
+  } catch (error) {
+    $("verdict").innerHTML = `<div class="card"><p class="notice">
+      ${escape(error.message)} &mdash; the API did not answer.</p></div>`;
+  }
+  $("propose").disabled = false;
+}
+
+$("propose").onclick = () => decide("propose");
+$("claim").onkeydown = (event) => { if (event.key === "Enter") decide("propose"); };
+
 document.addEventListener("click", (event) => {
+  if (event.target.id === "docommit") { decide("commit"); return; }
   if (event.target.tagName !== "BUTTON" || !event.target.closest(".chips")) return;
-  $("q").value = event.target.textContent.trim();
-  run();
+  const text = event.target.textContent.trim();
+  if (event.target.closest("#claims")) {
+    $("claim").value = text;
+    decide("propose");
+  } else {
+    $("q").value = text;
+    run();
+  }
 });
 
-api({ view: "health" }).then(({ body }) => {
-  const d = body.database;
-  $("stats").innerHTML =
-    `<b>${d.current_beliefs}</b> beliefs held now, <b>${d.beliefs}</b> ever &nbsp;&middot;&nbsp; ` +
-    `<b>${d.revisions}</b> revisions &nbsp;&middot;&nbsp; ` +
-    `<b>${d.chunks}</b> indexed chunks &nbsp;&middot;&nbsp; ` +
-    `<b>${d.requirements}</b> requirements over <b>${d.computations}</b> computations`;
-  $("server").textContent = d.server.split(" (")[0] + " · " + body.elapsed_ms + " ms";
-}).catch(() => {
-  $("stats").textContent = "the API is not answering";
-});
+function refreshStats() {
+  return api({ view: "health" }).then(({ body }) => {
+    const d = body.database;
+    // The visitor count is shown only when there is one, so the line reads as
+    // a fact about the memory rather than as a permanent zero.
+    const visitors = d.visitor_beliefs
+      ? ` &nbsp;&middot;&nbsp; <b>${d.visitor_beliefs}</b> written by visitors, expiring`
+      : "";
+    $("stats").innerHTML =
+      `<b>${d.current_beliefs}</b> beliefs held now, <b>${d.beliefs}</b> ever &nbsp;&middot;&nbsp; ` +
+      `<b>${d.revisions}</b> revisions &nbsp;&middot;&nbsp; ` +
+      `<b>${d.chunks}</b> indexed chunks &nbsp;&middot;&nbsp; ` +
+      `<b>${d.requirements}</b> requirements over <b>${d.computations}</b> computations` +
+      visitors;
+    $("server").textContent = d.server.split(" (")[0] + " · " + body.elapsed_ms + " ms";
+  }).catch(() => {
+    $("stats").textContent = "the API is not answering";
+  });
+}
+refreshStats();
 
 $("q").value = "what is blocking the FEA run";
 ask($("q").value);
