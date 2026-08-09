@@ -70,13 +70,22 @@ aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
 # its own headers on top of the ones the handler returns, and two
 # Access-Control-Allow-Origin headers make a browser reject the response. One
 # source of truth, and it is the handler.
+# Creating the URL and making it public are two calls, and a run that dies
+# between them leaves a function URL that answers 403 for ever after -- because
+# the obvious "create it only if absent" guard then skips the second call on
+# every later run. Measured on 2026-08-09. So the two settings are asserted
+# every time instead of being guarded by the existence of the first one.
 if ! aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
   aws lambda create-function-url-config --function-name "$FUNCTION" --region "$REGION" \
     --auth-type NONE >/dev/null
-  aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
-    --statement-id public-url --action lambda:InvokeFunctionUrl \
-    --principal '*' --function-url-auth-type NONE >/dev/null
+else
+  aws lambda update-function-url-config --function-name "$FUNCTION" --region "$REGION" \
+    --auth-type NONE >/dev/null
 fi
+# Already there is a success, not an error: the statement id makes it unique.
+aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
+  --statement-id public-url --action lambda:InvokeFunctionUrl \
+  --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
 API=$(aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" \
       --query FunctionUrl --output text)
 API="${API%/}"
@@ -110,10 +119,28 @@ git checkout -- web/config.js 2>/dev/null || true
 SITE="http://$BUCKET.s3-website-$REGION.amazonaws.com"
 
 # ------------------------------------------------------------------ check ---
-say "checking, from outside"
-curl -fsS "$API/?view=health" | head -c 300; echo
-curl -fsS -o /dev/null -w "site %{http_code}\n" "$SITE/"
-
-say "done"
+# The addresses are printed before the check, not after: a run that fails here
+# has still deployed something, and the operator needs to know where it is in
+# order to look at it. Under set -e the old order lost them both.
+say "deployed"
 echo "  demo   $SITE"
 echo "  api    $API/?view=health"
+
+say "checking, from outside"
+api_code=$(curl -sS -o /tmp/agentmem-health -w '%{http_code}' "$API/?view=health" || echo 000)
+site_code=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE/" || echo 000)
+echo "  api  $api_code"
+echo "  site $site_code"
+head -c 300 /tmp/agentmem-health 2>/dev/null; echo
+
+# This is the only line that decides whether the demo exists. Both ends have to
+# answer from outside, unauthenticated, the way a judge will meet them.
+if [ "$api_code" != "200" ] || [ "$site_code" != "200" ]; then
+  echo
+  echo "NOT DEPLOYED. The addresses above exist but do not serve."
+  echo "  api 403   -> the function URL is not public; see the add-permission call above"
+  echo "  api 500   -> the function runs and the database does not answer; check CRDB_URL"
+  echo "  site 403  -> the bucket policy or the public access block was not applied"
+  exit 1
+fi
+say "done"
