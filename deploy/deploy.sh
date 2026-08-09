@@ -133,29 +133,40 @@ aws s3 sync web/ "s3://$BUCKET/" --delete \
   --cache-control "public,max-age=60" --only-show-errors
 git checkout -- web/config.js 2>/dev/null || true
 
+# Two addresses for one bucket, and the difference is not cosmetic. The website
+# endpoint routes / to index.html but serves plain HTTP only -- S3 website
+# endpoints have no TLS, and Chrome's HTTPS-First mode puts a warning
+# interstitial in front of an http:// link. The REST endpoint has TLS but no
+# index document routing, so it needs the file name. The one to publish is the
+# one a judge can click without meeting a warning: the REST one.
 SITE="http://$BUCKET.s3-website-$REGION.amazonaws.com"
+SITE_TLS="https://$BUCKET.s3.$REGION.amazonaws.com/index.html"
 
 # ------------------------------------------------------------------ check ---
 # The addresses are printed before the check, not after: a run that fails here
 # has still deployed something, and the operator needs to know where it is in
 # order to look at it. Under set -e the old order lost them both.
 say "deployed"
-echo "  demo   $SITE"
+echo "  demo   $SITE_TLS      <- the one to publish"
+echo "  demo   $SITE          (http only)"
 echo "  api    $API/?view=health"
 
 say "checking, from outside"
 api_code=$(curl -sS -o /tmp/agentmem-health -w '%{http_code}' "$API/?view=health" || echo 000)
 site_code=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE/" || echo 000)
-echo "  api  $api_code"
-echo "  site $site_code"
+tls_code=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE_TLS" || echo 000)
+echo "  api       $api_code"
+echo "  site http $site_code"
+echo "  site tls  $tls_code"
 head -c 300 /tmp/agentmem-health 2>/dev/null; echo
 
-# This is the only line that decides whether the demo exists. Both ends have to
-# answer from outside, unauthenticated, the way a judge will meet them.
-if [ "$api_code" != "200" ] || [ "$site_code" != "200" ]; then
+# This is the only line that decides whether the demo exists. All three have to
+# answer from outside, unauthenticated, the way a judge will meet them -- and
+# the TLS address is checked too, because it is the one that gets published.
+if [ "$api_code" != "200" ] || [ "$site_code" != "200" ] || [ "$tls_code" != "200" ]; then
   echo
-  echo "NOT DEPLOYED. The addresses above exist but do not serve."
-  echo "  api 403   -> the function URL is not public; see the add-permission call above"
+  echo "NOT DEPLOYED. The addresses above exist but do not all serve."
+  echo "  api 403   -> the gateway did not get permission to invoke the function"
   echo "  api 500   -> the function runs and the database does not answer; check CRDB_URL"
   echo "  site 403  -> the bucket policy or the public access block was not applied"
   exit 1
