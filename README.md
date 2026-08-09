@@ -228,21 +228,32 @@ export CRDB_URL='postgresql://<user>:<password>@<host>:26257/agentmem?sslmode=ve
 
 psql "$CRDB_URL" -f sql/schema.sql
 psql "$CRDB_URL" -f sql/seed.sql
+psql "$CRDB_URL" -f sql/migration_002_visitor_writes.sql
 psql "$CRDB_URL" -f sql/queries.sql
 ```
 
 The order matters and the comments in `schema.sql` say why. Everything except the time travel query
 also works through the managed MCP server.
 
-Then the corpus, which needs Bedrock. This runs as is in AWS CloudShell, where the credentials
-already exist:
+The migration is not optional and was missing from this list until 2026-08-09. It adds the expiry
+column, the row-level TTL, the delete cascade and the `current_belief` view, and the API reads that
+view: a database built from `schema.sql` alone is one the deployed code cannot run against. Anyone
+who followed these instructions before that date got exactly that, which is a good argument for
+running your own install notes on an empty cluster at least once.
+
+Then the corpus:
 
 ```bash
 pip install --quiet pg8000            # pure Python, nothing to compile
-python3 ingest/chunker.py             # notes -> data/chunks.jsonl, offline
 python3 ingest/embed_and_load.py --reset
 python3 ingest/embed_and_load.py --search "why did the part get thicker"
 ```
+
+`ingest/chunker.py` produced `data/chunks.jsonl` and is kept here so the boundary is auditable, but
+it cannot run for you. It reads a private engineering repository that is not distributed with this
+one, and it takes the location as `SANDRAIL_NOTES` rather than assuming a path. Run it without that
+variable and it explains itself and exits 2. The passages it produced are in the database, and the
+demo shows them whenever a search retrieves one.
 
 `pg8000` rather than `psycopg2` on purpose, so the same file runs in CloudShell, in a Lambda zip
 and on a Windows laptop. Vectors go in one row at a time with a commit every 25, because the

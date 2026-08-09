@@ -207,7 +207,20 @@ const $ = (id) => document.getElementById(id);
 const escape = (s) => String(s == null ? "" : s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Reads go as GET, the one write goes as POST. Not a convention: a GET is
+// fetched by browser prefetch, by chat clients making a link preview and by
+// any crawler that meets the URL, none of which intended to change anything.
+const WRITES = new Set(["commit"]);
+
 async function api(params) {
+  if (WRITES.has(params.view)) {
+    const response = await fetch(window.API_BASE, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    return { status: response.status, body: await response.json() };
+  }
   const url = window.API_BASE + "?" + new URLSearchParams(params).toString();
   const response = await fetch(url);
   return { status: response.status, body: await response.json() };

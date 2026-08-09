@@ -15,6 +15,7 @@ pg8000 and not psycopg2, on purpose: pure Python, nothing to compile, so the
 same file runs in a Lambda zip built on Windows and on the laptop.
 """
 
+import base64
 import json
 import os
 import re
@@ -42,7 +43,10 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-west-2")
 CORS = {
     "Access-Control-Allow-Origin": os.environ.get("ALLOWED_ORIGIN", "*"),
     "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    # POST is here because the write route only answers to POST. Leave it out
+    # and the browser refuses the request at preflight, before the function is
+    # ever reached, which looks like a server fault and is not one.
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Content-Type": "application/json; charset=utf-8",
 }
 
@@ -669,11 +673,41 @@ def lambda_handler(event, context):
     if method == "OPTIONS":
         return {"statusCode": 204, "headers": CORS, "body": ""}
 
+    # A POST carries its parameters in the body. Merged under the query string
+    # so a caller cannot smuggle a different view past the check below by
+    # putting one in each place.
+    if method == "POST" and event.get("body"):
+        body = event["body"]
+        if event.get("isBase64Encoded"):
+            body = base64.b64decode(body).decode("utf-8", "replace")
+        try:
+            posted = json.loads(body)
+            if isinstance(posted, dict):
+                parameters = {**{k: str(v) for k, v in posted.items()},
+                              **parameters}
+        except ValueError:
+            return respond(400, {"error": "body is not JSON"}, started)
+
     view = parameters.get("view", "health")
     handler = ROUTES.get(view)
     if handler is None:
         return respond(400, {"error": f"unknown view '{view}'",
                              "views": sorted(ROUTES)}, started)
+
+    # The route that writes refuses to be a GET, and this is not ceremony.
+    # A GET is fetched by things that were never asked to: browser prefetch,
+    # link preview in a chat client, any crawler that finds the URL. A demo
+    # that writes on GET has a database written to by software, at a rate
+    # nobody chose, from a link somebody pasted once.
+    if view in WRITES and method != "POST":
+        return respond(405, {
+            "error": "method not allowed",
+            "view": view,
+            "detail": ("This route writes, so it is POST only. A GET would be "
+                       "followed by prefetchers, link previews and crawlers, "
+                       "none of which meant to change anything."),
+            "how": 'POST {"view": "commit", "claim": "<subject> is <value> because <evidence>"}',
+        }, started)
     try:
         payload = handler(parameters)
         # One structured line per request. CloudWatch turns it into a table,

@@ -45,19 +45,31 @@ class Server(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path != "/api":
             return super().do_GET()
-        parameters = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        self.call({k: v[0] for k, v in parse_qs(parsed.query).items()}, "GET", None)
+
+    def do_POST(self):
+        # The write route is POST only, so a server that speaks GET alone
+        # cannot exercise the half of the API that changes anything.
+        if urlparse(self.path).path != "/api":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        self.call({}, "POST", self.rfile.read(length).decode("utf-8") if length else None)
+
+    def call(self, parameters, method, body):
         event = {
             "queryStringParameters": parameters,
-            "requestContext": {"http": {"method": "GET"}},
+            "requestContext": {"http": {"method": method}},
+            "body": body,
         }
         response = handler.lambda_handler(event, Context())
-        body = response["body"].encode("utf-8")
+        payload = response["body"].encode("utf-8")
         self.send_response(response["statusCode"])
         for key, value in response["headers"].items():
             self.send_header(key, value)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(payload)
 
     def log_message(self, *args):
         pass

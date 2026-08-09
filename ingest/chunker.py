@@ -12,10 +12,20 @@ prose is how you get four false positives out of four:
 
 REDACTIONS replaces the names of third parties who never agreed to appear in a
 public dataset. The engineering content is the author's own.
+
+    SANDRAIL_NOTES=/path/to/notes python3 ingest/chunker.py
+
+The notes are a private engineering repository and are not distributed with
+this one, so this script cannot run for anybody else and says so instead of
+failing on a path from somebody's laptop. The chunks it would produce are the
+corpus already loaded in the database, which the demo reads and displays; the
+point of keeping the script here is that the boundary is auditable, not that a
+reader can rerun it.
 """
 
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -24,7 +34,12 @@ from pathlib import Path
 # stdout kills the script.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-SANDRAIL = Path(r"E:\Urban_OS\03_Projects\projet-sandrail")
+# An absolute path to somebody's laptop was hard-coded here until 2026-08-09,
+# in a public repository whose README told the reader to run this file. It
+# failed for everyone but its author and published the layout of a private
+# repository on the way. The location is an input now, and its absence is an
+# explained exit rather than a traceback.
+SANDRAIL = Path(os.environ.get("SANDRAIL_NOTES", "")).expanduser()
 OUT = Path(__file__).resolve().parent.parent / "data" / "chunks.jsonl"
 
 # Bounded on purpose: one subsystem, the documents that carry its state.
@@ -115,6 +130,19 @@ def belief_for(heading):
 
 
 def main():
+    if not SANDRAIL.name or not SANDRAIL.is_dir():
+        print("SANDRAIL_NOTES is not set to a directory that exists.")
+        print()
+        print("This script reads a private engineering repository that is not")
+        print("distributed with this one, so it cannot run outside the machine")
+        print("that holds those notes. The corpus it produces is already loaded")
+        print("in the database and the demo displays the passages it retrieves.")
+        print()
+        print("  SANDRAIL_NOTES=/path/to/notes python3 ingest/chunker.py")
+        print()
+        print(f"expected these files under it: {[name for name, _ in SOURCES]}")
+        return 2
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     written, skipped, missing = 0, 0, []
 
@@ -148,4 +176,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main returns a status and it has to reach the shell. Without this the
+    # script printed a refusal and exited 0, which is the shape of a step that
+    # a pipeline happily builds on.
+    sys.exit(main() or 0)
