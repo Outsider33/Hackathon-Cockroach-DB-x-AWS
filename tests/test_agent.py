@@ -219,8 +219,40 @@ for question, expected in [
     ("what changed my mind", "revisions"),
     ("what did I believe on 2026-07-30", "asof"),
     ("why did the part get thicker", "search"),
+    ("what does storage still remember", "timetravel"),
+    ("how far back does the retention go", "timetravel"),
 ]:
     check(f"{expected:9s} <- {question}", handler.route(question)[0], expected)
+
+print("\ntwo kinds of history")
+inside = handler.view_timetravel(70)
+check("a read inside the window answers", inside["storage"]["answered"], True)
+check("and it is not the slow path", inside["storage"]["took_ms"] < 2000, True)
+check("the modelled history answers the same instant",
+      inside["modelled"]["beliefs"] > 0, True)
+# The argument of the whole project, as an assertion: the modelled history
+# answers about a date the storage layer cannot be asked about at any price.
+check("it also answers a date storage cannot reach",
+      inside["beyond_storage"]["beliefs"] > 0, True)
+check("the window is the one the cluster declares",
+      inside["gc_window_minutes"], 75)
+
+outside = handler.view_timetravel(120)
+check("a read past the window is refused, not empty",
+      outside["storage"]["answered"], False)
+check("and the refusal is reported as data",
+      "threshold" in outside["storage"]["refused_with"]
+      or "timed out" in outside["storage"]["refused_with"], True)
+check("the modelled history answers it anyway",
+      outside["modelled"]["beliefs"], inside["modelled"]["beliefs"])
+# Out of range does not mean out of control: the offset is clamped before the
+# database is asked, because past about three hours the read hangs rather than
+# failing, and the function has twenty seconds.
+check("an absurd offset is clamped, not forwarded",
+      handler.view_timetravel(9999)["storage"]["offset"],
+      f"-{handler.MAX_TRAVEL_MINUTES}m")
+check("a non-numeric offset is refused",
+      "error" in handler.view_timetravel("yesterday"), True)
 
 check("every belief has a vector",
       handler.query("SELECT count(*) AS n FROM belief WHERE embedding IS NULL")[0]["n"],

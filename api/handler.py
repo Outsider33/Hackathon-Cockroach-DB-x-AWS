@@ -78,6 +78,11 @@ def connect():
         timeout=10,
     )
     _connection.autocommit = True
+    # Once per connection rather than around each risky statement. The function
+    # has twenty seconds and a time travel read past the retention window does
+    # not fail fast: it retries inside the server for over three seconds before
+    # giving up, and a bad offset should not be able to spend the whole budget.
+    _connection.cursor().execute("SET statement_timeout = '8s'")
     return _connection
 
 
@@ -260,6 +265,101 @@ def view_asof(on):
         "on": on,
         "beliefs": clean(rows),
         "revised_since": revised_since[0]["n"],
+    }
+
+
+# The garbage collection window on this cluster, read from the zone config
+# rather than assumed: gc.ttlseconds = 4500. It is not configurable on the free
+# plan, which is the whole reason this project models history instead of
+# reading it back out of storage.
+GC_WINDOW_MINUTES = 75
+
+# Past the window a time travel read does not fail quickly. Measured on
+# 2026-08-09: -80m returns the GC threshold error at once, but -3h and -24h
+# time out instead, and a request that hangs for twenty seconds is a demo a
+# judge closes. So the offset is bounded here, before the database is asked.
+MAX_TRAVEL_MINUTES = 150
+
+
+def view_timetravel(minutes=70):
+    """Both kinds of history, side by side, on the same instant.
+
+    This is the argument the project is built on, run rather than asserted.
+    Storage keeps every version for seventy five minutes and then forgets them
+    permanently. The modelled history keeps intervals and evidence for as long
+    as the rows exist. Ask both the same question and the difference stops
+    being a paragraph in a README.
+    """
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return {"view": "timetravel", "error": "minutes must be a whole number"}
+    minutes = max(1, min(minutes, MAX_TRAVEL_MINUTES))
+    instant = f"-{minutes}m"
+
+    started = time.time()
+    storage = {"offset": instant, "within_window": minutes <= GC_WINDOW_MINUTES}
+    try:
+        rows = query(
+            # No placeholder: AS OF SYSTEM TIME takes a constant, and the value
+            # is built from an integer this function has already bounded.
+            f"SELECT count(*) AS n FROM belief AS OF SYSTEM TIME '{instant}'"
+        )
+        storage["answered"] = True
+        storage["beliefs"] = rows[0]["n"]
+    except Exception as error:
+        detail = str(error)
+        storage["answered"] = False
+        storage["refused_with"] = (
+            "the read timed out" if "timed out" in detail.lower()
+            else "batch timestamp must be after replica GC threshold")
+        storage["why"] = (
+            f"Storage keeps {GC_WINDOW_MINUTES} minutes of versions on this "
+            "plan and gc.ttlseconds is not configurable here. Older versions "
+            "are not slow to reach, they are gone.")
+    # Reported because it is part of the answer: a read inside the window costs
+    # the same as any other read, and a read past it spends three seconds
+    # retrying before admitting the versions are gone. The refusal is the slow
+    # path, not the time travel.
+    storage["took_ms"] = int((time.time() - started) * 1000)
+
+    # The same instant, asked of the modelled history. Belief time is data, so
+    # there is no window and no configuration involved.
+    modelled = query(
+        """
+        SELECT count(*) AS n FROM belief
+        WHERE valid_from <= now() - %s::INTERVAL
+          AND (valid_to IS NULL OR valid_to > now() - %s::INTERVAL)
+        """,
+        (instant.lstrip("-"), instant.lstrip("-")),
+    )[0]["n"]
+
+    # And a date storage cannot reach at all, which is the point. The oldest
+    # revision in this memory is weeks old; the storage layer's memory begins
+    # seventy five minutes ago.
+    oldest = query("SELECT min(occurred_at) AS first FROM revision")[0]["first"]
+    far = query(
+        """
+        SELECT count(*) AS n FROM belief
+        WHERE valid_from <= %s::TIMESTAMPTZ
+          AND (valid_to IS NULL OR valid_to > %s::TIMESTAMPTZ)
+        """,
+        (oldest, oldest),
+    )[0]["n"]
+
+    return {
+        "view": "timetravel",
+        "gc_window_minutes": GC_WINDOW_MINUTES,
+        "storage": storage,
+        "modelled": {"offset": instant, "beliefs": modelled},
+        "beyond_storage": {
+            "on": serialise(oldest),
+            "beliefs": far,
+            "note": ("The oldest revision in this memory. Storage cannot be "
+                     "asked about this instant at any price on this plan, and "
+                     "the modelled history answers it the same way it answers "
+                     "about ten minutes ago."),
+        },
     }
 
 
@@ -703,6 +803,11 @@ def view_commit(claim):
 # --------------------------------------------------------------------------
 
 STRUCTURAL = [
+    # First because it is the most specific, and because "remember" would
+    # otherwise be read as a question about beliefs rather than about storage.
+    ("timetravel", re.compile(
+        r"\b(storage (still )?remember|time travel|how far back|"
+        r"as of system time|mvcc|garbage collect\w*|retention)\b", re.I)),
     # Ordered, and the order is the point. "what do I need to know to unblock
     # the FEA run" and "what is blocking the FEA run" are different questions:
     # the first asks for the reading, the second for the state. Tested first so
@@ -738,6 +843,11 @@ def view_ask(question):
     view, arguments = route(question)
     if view == "missing":
         payload = view_missing()
+    elif view == "timetravel":
+        # A number in the question is the offset to travel to, so "what did
+        # storage remember 90 minutes ago" asks past the window on purpose.
+        asked = re.search(r"\b(\d{1,3})\s*(?:m|min|minutes?)\b", question, re.I)
+        payload = view_timetravel(int(asked.group(1)) if asked else 70)
     elif view == "unblock":
         # A computation named in the question narrows it; otherwise every
         # blocked one is answered, which is the useful default on a Monday.
@@ -784,6 +894,7 @@ ROUTES = {
     "unblock": lambda p: view_unblock(p.get("computation")),
     "revisions": lambda p: view_revisions(),
     "asof": lambda p: view_asof(p.get("on")),
+    "timetravel": lambda p: view_timetravel(p.get("minutes", 70)),
     "search": lambda p: view_search(p.get("q", "")),
     "ask": lambda p: view_ask(p.get("q", "")),
     "propose": lambda p: view_propose(p.get("claim", "")),

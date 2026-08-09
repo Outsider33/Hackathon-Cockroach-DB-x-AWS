@@ -70,6 +70,39 @@ carries its evidence in a `NOT NULL` column, because a revision without evidence
 and not learning. Time travel stays as a safety net for the last 75 minutes, which is what it is
 good at.
 
+**The demo runs both, on the same instant, rather than asserting the difference.**
+
+```
+                                                          answer          took
+storage    AS OF SYSTEM TIME '-70m'                        39 beliefs      297 ms
+modelled   belief interval, -70m                           25 beliefs
+storage    AS OF SYSTEM TIME '-120m'                       refused        3718 ms
+                 batch timestamp must be after replica GC threshold
+modelled   2026-07-26                                      10 beliefs
+```
+
+Three things in that table are worth more than the paragraph above it.
+
+**The refusal is the slow path, not the time travel.** A read inside the window costs what any
+read costs. A read past it spends three and a half seconds retrying inside the server before
+admitting the versions are gone, and past about three hours it stops answering at all — which is
+why the offset is clamped before the database is asked and the connection carries a statement
+timeout. A demo that hangs for twenty seconds is a demo a judge closes.
+
+**The two counts differ, and that is not a bug.** Storage counts rows that existed 70 minutes ago,
+including superseded ones and one a visitor wrote and let expire. The modelled history counts
+beliefs that were *held* then. Storage answers "what was in the table", the model answers "what did
+this agent think", and those were never the same question.
+
+**The last line is the argument.** 2026-07-26 is the oldest revision in this memory. Storage cannot
+be asked about it at any price on this plan, and the model answers it exactly the way it answers
+about ten minutes ago.
+
+*Measured over pgwire on 2026-08-09. The managed MCP server rejects `AS OF SYSTEM TIME` at every
+offset, including ones well inside the window — its SQL-over-HTTP layer sets its own timestamp. A
+note in this repository had recorded that as a possible 75 minute limit for a week; it was a client
+limitation and the window was fine.*
+
 ## What do I need to know, and where do I read it
 
 For a week this project had two halves that never spoke. One answers *what is missing* with a join

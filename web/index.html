@@ -193,6 +193,7 @@
 <div class="chips" id="examples">
   <button>what do I need to know to unblock the FEA run</button>
   <button>what is blocking the FEA run</button>
+  <button>what does storage still remember</button>
   <button>what changed my mind</button>
   <button>what did I believe on 2026-07-30</button>
   <button>why did the part get thicker</button>
@@ -369,9 +370,40 @@ function renderUnblock(data) {
   }).join("");
 }
 
+function renderTimetravel(data) {
+  const s = data.storage;
+  const storageRow = s.answered
+    ? `<b style="color:var(--ok)">${s.beliefs} beliefs</b>`
+    : `<b style="color:var(--blocked)">refused</b> &mdash; ${escape(s.refused_with)}`;
+  const why = s.why ? `<p class="why">${escape(s.why)}</p>` : "";
+  return `<div class="card">
+      <h3>two kinds of history, same instant</h3>
+      <p class="why">Storage keeps every version for ${data.gc_window_minutes} minutes on this
+        plan, and the setting is not configurable here. Belief time is data, so it has no
+        window at all.</p>
+      <div class="scroll"><table>
+        <tr><td class="key">storage
+            <span style="color:var(--dim)">AS OF SYSTEM TIME ${escape(s.offset)}</span></td>
+            <td>${storageRow}</td>
+            <td class="crit">${s.took_ms} ms</td></tr>
+        <tr><td class="key">modelled
+            <span style="color:var(--dim)">belief interval, ${escape(s.offset)}</span></td>
+            <td><b style="color:var(--ok)">${data.modelled.beliefs} beliefs</b></td>
+            <td class="crit"></td></tr>
+        <tr><td class="key">modelled
+            <span style="color:var(--dim)">${escape(String(data.beyond_storage.on).slice(0, 10))}</span></td>
+            <td><b style="color:var(--ok)">${data.beyond_storage.beliefs} beliefs</b></td>
+            <td class="crit">out of reach for storage</td></tr>
+      </table></div>
+      ${why}
+      <p class="why">${escape(data.beyond_storage.note)}</p>
+    </div>`;
+}
+
 const RENDER = {
   missing: renderMissing,
   unblock: renderUnblock,
+  timetravel: renderTimetravel,
   revisions: renderRevisions,
   asof: renderAsof,
   search: renderSearch,
@@ -379,6 +411,7 @@ const RENDER = {
 
 const ROUTE_NOTE = {
   missing: "structural &rarr; <b>SQL join</b> over computation &times; requirement &times; belief. Exact answer.",
+  timetravel: "both histories &rarr; <b>AS OF SYSTEM TIME</b> beside the modelled interval. The storage window is 75 minutes here and is not configurable; the model has none. A read past the window is the slow path, not the time travel.",
   unblock: "structural <b>and</b> semantic &rarr; the join finds the gaps, then a <b>lateral vector search</b> reads the corpus from where each belief sits. One query, both halves.",
   revisions: "structural &rarr; <b>SQL join</b> over revision &times; belief, ordered by belief time.",
   asof: "structural &rarr; <b>interval query</b> on belief time. Not an MVCC snapshot: that window is 75 minutes here, these revisions are days apart.",
