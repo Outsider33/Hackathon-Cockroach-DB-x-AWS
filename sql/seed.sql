@@ -1,4 +1,4 @@
--- Seed data -- FIFTEEN REAL BELIEF REVISIONS.
+-- Seed data -- SEVENTEEN REAL BELIEF REVISIONS.
 --
 -- None of this is synthetic. Every row comes from a dated engineering log in a
 -- private repository, where an AI agent and its author spent two weeks running
@@ -11,10 +11,13 @@
 -- a symmetric convergence tolerance that accepted a design failing by 4%, and
 -- a submission repository that returned 404 to anyone but its owner.
 --
--- The fifteenth was added on 2026-08-11 and is the only one where the agent was
--- wrong about its OWN diagnosis: it had blamed the mesher for being slow, then
--- told the engineer to revert the fix. The mesher took 35.9 s against a 300 s
--- budget. The defect was that the instrument moved with the measurement.
+-- The last three were added on 2026-08-11, and the first of them is the only one
+-- where the agent was wrong about its OWN diagnosis rather than about the part:
+-- it had blamed the mesher for being slow and told the engineer to revert the
+-- fix. The mesher takes 35.9 s against a 300 s budget. The defect was that the
+-- instrument moved with the measurement, so the two numbers that depended on it
+-- had to be revised as well -- and one of those, 6.007 kg, turned out to match
+-- no archived run at all. That is recorded in its evidence rather than tidied up.
 
 USE agentmem;
 
@@ -36,7 +39,11 @@ INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
 ('displayed_rod_spacing',     '292.1 mm, retyped into the overlay by hand', 'ESTABLISHED', 'video overlay, v3', '2026-07-31 00:00:00+00', '2026-08-01 00:00:00+00'),
 ('submission_repo_public',    'the repository linked in the end card is public', 'ESTABLISHED', 'assumed, never clicked', '2026-07-28 00:00:00+00', '2026-08-01 00:00:00+00'),
 ('contest_criteria',          'five criteria, equally weighted', 'ESTABLISHED', 'assumed from the landing page', '2026-07-27 00:00:00+00', '2026-08-02 00:00:00+00'),
-('mesh_independence',         'two runs of the same commit return 14.00 mm and 13.28 mm -- unexplained', 'UNDECIDABLE', 'mesh size was slaved to thickness: the instrument changed with the measurement', '2026-07-31 00:00:00+00', '2026-08-11 00:00:00+00');
+('mesh_independence',         'two runs of the same commit return 14.00 mm and 13.28 mm -- unexplained', 'UNDECIDABLE', 'mesh size was slaved to thickness: the instrument changed with the measurement', '2026-07-31 00:00:00+00', '2026-08-11 00:00:00+00'),
+-- Superseded the day the instrument was fixed. Both were converged on a mesh that
+-- moved with the part, so neither was a measurement of the part alone.
+('part_thickness',            '14.00 mm', 'ESTABLISHED', 'FEA run, tensor fatigue criterion', '2026-07-31 00:00:00+00', '2026-08-11 00:00:00+00'),
+('part_mass',                 '6.007 kg', 'ESTABLISHED', 'FEA run, tensor fatigue criterion', '2026-07-31 00:00:00+00', '2026-08-11 00:00:00+00');
 
 -- ---------------------------------------------------------------------------
 -- What is believed now -- including, explicitly, what is not known.
@@ -47,8 +54,8 @@ INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
 ('convergence_criterion',     'the most demanding of the two: static OR fatigue', 'ESTABLISHED', 'REPRISE.md sec.3.4', '2026-07-26 00:00:00+00', NULL),
 ('pocket_count',              '0 pockets -- the optimiser was dead and silent for two full runs', 'ESTABLISHED', 'REPRISE.md sec.3.5', '2026-07-26 00:00:00+00', NULL),
 ('fatigue_amplitude_basis',   'sigma_a = VM( Sigma_max - Sigma_min ) / 2, on the amplitude TENSOR', 'ESTABLISHED', 'REPRISE.md sec.3.7', '2026-07-31 00:00:00+00', NULL),
-('part_thickness',            '14.00 mm', 'ESTABLISHED', 'FEA run, tensor fatigue criterion', '2026-07-31 00:00:00+00', NULL),
-('part_mass',                 '6.007 kg', 'ESTABLISHED', 'FEA run, tensor fatigue criterion', '2026-07-31 00:00:00+00', NULL),
+('part_thickness',            '12.74 mm', 'ESTABLISHED', 'FEA runs of 2026-08-11, fixed-instrument mesh, two runs agreeing', '2026-08-11 00:00:00+00', NULL),
+('part_mass',                 '6.69 kg', 'ESTABLISHED', 'FEA runs of 2026-08-11, fixed-instrument mesh, two runs agreeing', '2026-08-11 00:00:00+00', NULL),
 ('fatigue_safety_factor',     '1.51', 'ESTABLISHED', 'FEA run, tensor fatigue criterion', '2026-07-31 00:00:00+00', NULL),
 ('governing_cycle',           '8g bump <-> 1.5g cornering with load transfer -- two ORTHOGONAL load cases', 'ESTABLISHED', 'REPRISE.md sec.3.7, sweep of all 15 state pairs', '2026-07-31 00:00:00+00', NULL),
 ('stop_tolerance',            '0.95 <= demand <= 1.0 -- converge from the safe side only', 'ESTABLISHED', 'REPRISE.md sec.3.8', '2026-07-31 12:00:00+00', NULL),
@@ -67,29 +74,39 @@ INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
 -- ---------------------------------------------------------------------------
 INSERT INTO revision (belief_old, belief_new, occurred_at, evidence, evidence_source)
 SELECT o.id, n.id, n.valid_from,
-  CASE o.key
-    WHEN 'hub_barrel_manufacturable' THEN 'Direct check of the bearing spacing against the supplier drawing: the barrel could not be machined as modelled, and carried 1.7 kg of metal that no load case needs.'
-    WHEN 'convergence_criterion'     THEN 'The loop was converging on whichever criterion it was told to watch, not on the one that governs. Swept both; fatigue governs here.'
-    WHEN 'pocket_count'              THEN 'The run log printed n_poches = 0 for two consecutive runs and nobody read it. The optimiser had been dead the whole time.'
-    WHEN 'fatigue_amplitude_basis'   THEN 'Von Mises carries no sign, so two opposite bending states look identical to it and a full stress reversal reads as zero amplitude. Checked on an analytic case (+174.7 <-> -17.5 MPa): sigma_a = 96.1 instead of 78.6, an 18% underestimate.'
-    WHEN 'part_thickness'            THEN 'Consequence of the tensor fatigue criterion. The part had to grow by 2.47 mm to keep the same safety factor.'
-    WHEN 'part_mass'                 THEN 'Consequence of the tensor fatigue criterion: +513 g. A full day of weight optimisation was cancelled -- the 5.494 kg had never existed.'
-    WHEN 'fatigue_safety_factor'     THEN 'The previous 1.74 was computed on an amplitude that ignored stress reversal. Real value 1.51, still above the 1.50 target but with no margin left.'
-    WHEN 'governing_cycle'           THEN 'Sweeping all 15 state pairs instead of the hard-coded pair found a worse cycle than the left/right inversion. The reasoning was right in principle and wrong about the culprit -- which is exactly why you sweep instead of assume.'
-    WHEN 'stop_tolerance'            THEN 'A symmetric tolerance accepts demand = 1.042, i.e. a design that FAILS by 4%. Observed: the loop stopped at 12.44 mm with SF 1.44 against 1.50 required.'
-    WHEN 'caliper_datasheet'         THEN '191 catalogue PDFs downloaded, none containing the selected caliper. The answer came from a reseller product page. The single most decisive document in the corpus was named 0901d19680537e49_pdf_preview_medium.pdf.'
-    WHEN 'strobe_cause'              THEN 'After the same defect was reported twice, stop fixing and start removing: deleting the ground plane removed the flicker. Five encoding fixes had targeted the wrong layer, and one of them made it worse.'
-    WHEN 'displayed_rod_spacing'     THEN 'The overlay showed 292.1 mm while the spec had said 220.0 since the previous day -- in the very shot where the voiceover claims every number comes from the file.'
-    WHEN 'submission_repo_public'    THEN 'Clicked the link from a logged-out browser on the day of publication: 404. The submission would have been ineligible, and it was found by accident.'
-    WHEN 'contest_criteria'          THEN 'Read the actual rules page instead of the landing page. Two deliverables had been treated as mandatory that were not required at all, and the one that was mandatory had been missed.'
-    WHEN 'mesh_independence'         THEN 'The instrument was the defect, not the mesher. Element size had been slaved to thickness, so it changed with every iteration and no two were comparable -- which is why the same commit returned 14.00 mm and 13.28 mm, and why the safety factor once JUMPED from 1.44 to 2.24 for 0.21 mm of ADDED thickness, a physical impossibility. Fixing the size at 6.0 mm made the loop converge monotonically in two iterations instead of five plus a fallback, and two independent runs the same day returned identical results to the second decimal. The fix costs 35.9 s of meshing, eight times under the budget that had been blamed for it.'
+  CASE
+    WHEN o.key = 'hub_barrel_manufacturable' THEN 'Direct check of the bearing spacing against the supplier drawing: the barrel could not be machined as modelled, and carried 1.7 kg of metal that no load case needs.'
+    WHEN o.key = 'convergence_criterion'     THEN 'The loop was converging on whichever criterion it was told to watch, not on the one that governs. Swept both; fatigue governs here.'
+    WHEN o.key = 'pocket_count'              THEN 'The run log printed n_poches = 0 for two consecutive runs and nobody read it. The optimiser had been dead the whole time.'
+    WHEN o.key = 'fatigue_amplitude_basis'   THEN 'Von Mises carries no sign, so two opposite bending states look identical to it and a full stress reversal reads as zero amplitude. Checked on an analytic case (+174.7 <-> -17.5 MPa): sigma_a = 96.1 instead of 78.6, an 18% underestimate.'
+    WHEN o.key = 'part_thickness' AND o.valid_to = TIMESTAMPTZ '2026-07-31 00:00:00+00'            THEN 'Consequence of the tensor fatigue criterion. The part had to grow by 2.47 mm to keep the same safety factor.'
+    WHEN o.key = 'part_mass' AND o.valid_to = TIMESTAMPTZ '2026-07-31 00:00:00+00'                 THEN 'Consequence of the tensor fatigue criterion: +513 g. A full day of weight optimisation was cancelled -- the 5.494 kg had never existed.'
+    WHEN o.key = 'fatigue_safety_factor'     THEN 'The previous 1.74 was computed on an amplitude that ignored stress reversal. Real value 1.51, still above the 1.50 target but with no margin left.'
+    WHEN o.key = 'governing_cycle'           THEN 'Sweeping all 15 state pairs instead of the hard-coded pair found a worse cycle than the left/right inversion. The reasoning was right in principle and wrong about the culprit -- which is exactly why you sweep instead of assume.'
+    WHEN o.key = 'stop_tolerance'            THEN 'A symmetric tolerance accepts demand = 1.042, i.e. a design that FAILS by 4%. Observed: the loop stopped at 12.44 mm with SF 1.44 against 1.50 required.'
+    WHEN o.key = 'caliper_datasheet'         THEN '191 catalogue PDFs downloaded, none containing the selected caliper. The answer came from a reseller product page. The single most decisive document in the corpus was named 0901d19680537e49_pdf_preview_medium.pdf.'
+    WHEN o.key = 'strobe_cause'              THEN 'After the same defect was reported twice, stop fixing and start removing: deleting the ground plane removed the flicker. Five encoding fixes had targeted the wrong layer, and one of them made it worse.'
+    WHEN o.key = 'displayed_rod_spacing'     THEN 'The overlay showed 292.1 mm while the spec had said 220.0 since the previous day -- in the very shot where the voiceover claims every number comes from the file.'
+    WHEN o.key = 'submission_repo_public'    THEN 'Clicked the link from a logged-out browser on the day of publication: 404. The submission would have been ineligible, and it was found by accident.'
+    WHEN o.key = 'contest_criteria'          THEN 'Read the actual rules page instead of the landing page. Two deliverables had been treated as mandatory that were not required at all, and the one that was mandatory had been missed.'
+    WHEN o.key = 'mesh_independence'         THEN 'The instrument was the defect, not the mesher. Element size had been slaved to thickness, so it changed with every iteration and no two were comparable -- which is why the same commit returned 14.00 mm and 13.28 mm, and why the safety factor once JUMPED from 1.44 to 2.24 for 0.21 mm of ADDED thickness, a physical impossibility. Fixing the size at 6.0 mm made the loop converge monotonically in two iterations instead of five plus a fallback, and two independent runs the same day returned identical results to the second decimal. The fix costs 35.9 s of meshing, eight times under the budget that had been blamed for it.'
+    -- Second revision of the same two keys, eleven days later. Told apart by the
+    -- closing date: from here a key can carry more than one closed interval, and
+    -- CASE o.key alone would hand both of them the same evidence.
+    WHEN o.key = 'part_thickness' AND o.valid_to = TIMESTAMPTZ '2026-08-11 00:00:00+00'
+    THEN 'Measured again once the instrument stopped moving. The 14.00 mm had been converged on a mesh whose element size followed the thickness, so each iteration was measured with a different ruler. At a fixed 6.0 mm the loop settles at 12.74 mm, and two independent runs on 2026-08-11 agree to the second decimal. The part is 1.26 mm thinner than believed, and the safety factor is unchanged at 1.51 -- the margin was never the issue, the repeatability was.'
+    WHEN o.key = 'part_mass' AND o.valid_to = TIMESTAMPTZ '2026-08-11 00:00:00+00'
+    THEN 'Same fix, and an honest anomaly recorded rather than smoothed over: the part gets THINNER while it gets HEAVIER, 12.74 mm for 6.69 kg, with the same 42 pockets. That combination is not explained yet. Worse, the 6.007 kg it replaces matches no archived run on disk -- the two runs of 2026-07-31 recorded 6.972 kg and 6.849 kg. So this revision corrects a number whose own provenance was already broken, and says so instead of pretending the chain was clean.'
   END,
   CASE
     WHEN o.key IN ('hub_barrel_manufacturable','convergence_criterion','pocket_count','fatigue_amplitude_basis','part_thickness','part_mass','fatigue_safety_factor','governing_cycle','stop_tolerance','mesh_independence') THEN 'CAD_Pipeline/REPRISE.md'
     ELSE 'CLAUDE.md, protocols P1 to P7'
   END
-FROM belief o JOIN belief n ON o.key = n.key
-WHERE o.valid_to IS NOT NULL AND n.valid_to IS NULL;
+-- Paired on the DATE BOUNDARY, not merely on the key. From 2026-08-11 three keys
+-- carry two closed intervals, and pairing by key alone would invent a revision
+-- that never happened (11.53 mm straight to 12.74 mm, skipping the 14.00 mm the
+-- agent actually believed for eleven days).
+FROM belief o JOIN belief n ON o.key = n.key AND o.valid_to = n.valid_from;
 
 -- ---------------------------------------------------------------------------
 -- The open questions. These are not failures of the memory, they are its
