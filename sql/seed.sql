@@ -1,4 +1,4 @@
--- Seed data -- FOURTEEN REAL BELIEF REVISIONS.
+-- Seed data -- FIFTEEN REAL BELIEF REVISIONS.
 --
 -- None of this is synthetic. Every row comes from a dated engineering log in a
 -- private repository, where an AI agent and its author spent two weeks running
@@ -10,6 +10,11 @@
 -- stress reversal, an optimiser that had been dead and silent for two runs,
 -- a symmetric convergence tolerance that accepted a design failing by 4%, and
 -- a submission repository that returned 404 to anyone but its owner.
+--
+-- The fifteenth was added on 2026-08-11 and is the only one where the agent was
+-- wrong about its OWN diagnosis: it had blamed the mesher for being slow, then
+-- told the engineer to revert the fix. The mesher took 35.9 s against a 300 s
+-- budget. The defect was that the instrument moved with the measurement.
 
 USE agentmem;
 
@@ -30,7 +35,8 @@ INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
 ('strobe_cause',              'video encoding defect', 'ESTABLISHED', 'five encoding fixes attempted, one made it worse', '2026-07-31 00:00:00+00', '2026-08-01 00:00:00+00'),
 ('displayed_rod_spacing',     '292.1 mm, retyped into the overlay by hand', 'ESTABLISHED', 'video overlay, v3', '2026-07-31 00:00:00+00', '2026-08-01 00:00:00+00'),
 ('submission_repo_public',    'the repository linked in the end card is public', 'ESTABLISHED', 'assumed, never clicked', '2026-07-28 00:00:00+00', '2026-08-01 00:00:00+00'),
-('contest_criteria',          'five criteria, equally weighted', 'ESTABLISHED', 'assumed from the landing page', '2026-07-27 00:00:00+00', '2026-08-02 00:00:00+00');
+('contest_criteria',          'five criteria, equally weighted', 'ESTABLISHED', 'assumed from the landing page', '2026-07-27 00:00:00+00', '2026-08-02 00:00:00+00'),
+('mesh_independence',         'two runs of the same commit return 14.00 mm and 13.28 mm -- unexplained', 'UNDECIDABLE', 'mesh size was slaved to thickness: the instrument changed with the measurement', '2026-07-31 00:00:00+00', '2026-08-11 00:00:00+00');
 
 -- ---------------------------------------------------------------------------
 -- What is believed now -- including, explicitly, what is not known.
@@ -51,7 +57,7 @@ INSERT INTO belief (key, value, status, source, valid_from, valid_to) VALUES
 ('displayed_rod_spacing',     '220.0 mm -- read from the spec file at render time', 'ESTABLISHED', 'overlay.py, values read not retyped', '2026-08-01 00:00:00+00', NULL),
 ('submission_repo_public',    'PRIVATE -- a judge following the link would have got a 404', 'ESTABLISHED', 'clicked from a logged-out browser', '2026-08-01 00:00:00+00', NULL),
 ('contest_criteria',          '25% documentation, 20% API reports, 20% technical, 15% UI, 20% creativity', 'ESTABLISHED', 'the actual rules page, copied into the repo', '2026-08-02 00:00:00+00', NULL),
-('mesh_independence',         'two runs of the same commit return 14.00 mm and 13.28 mm -- unexplained', 'UNDECIDABLE', 'mesh size was slaved to thickness: the instrument changed with the measurement', '2026-07-31 00:00:00+00', NULL),
+('mesh_independence',         'INDEPENDENT -- with a constant clmax of 6.0 mm, two runs of the same commit on 2026-08-11 returned exactly 12.74 mm, 6.69 kg, SF 1.51', 'ESTABLISHED', 'FEA runs of 2026-08-11, morning and evening, fixed-instrument mesh', '2026-08-11 00:00:00+00', NULL),
 ('published_numbers_checked', '???', 'UNDECIDABLE', 'coherence.py -- no explicit run marker in the prose to check against', '2026-07-28 00:00:00+00', NULL),
 ('additive_fatigue_data',     'not found -- no qualification dataset for this alloy and process', 'NOT_FOUND', 'literature sweep, 2026-07-25', '2026-07-25 00:00:00+00', NULL);
 
@@ -76,9 +82,10 @@ SELECT o.id, n.id, n.valid_from,
     WHEN 'displayed_rod_spacing'     THEN 'The overlay showed 292.1 mm while the spec had said 220.0 since the previous day -- in the very shot where the voiceover claims every number comes from the file.'
     WHEN 'submission_repo_public'    THEN 'Clicked the link from a logged-out browser on the day of publication: 404. The submission would have been ineligible, and it was found by accident.'
     WHEN 'contest_criteria'          THEN 'Read the actual rules page instead of the landing page. Two deliverables had been treated as mandatory that were not required at all, and the one that was mandatory had been missed.'
+    WHEN 'mesh_independence'         THEN 'The instrument was the defect, not the mesher. Element size had been slaved to thickness, so it changed with every iteration and no two were comparable -- which is why the same commit returned 14.00 mm and 13.28 mm, and why the safety factor once JUMPED from 1.44 to 2.24 for 0.21 mm of ADDED thickness, a physical impossibility. Fixing the size at 6.0 mm made the loop converge monotonically in two iterations instead of five plus a fallback, and two independent runs the same day returned identical results to the second decimal. The fix costs 35.9 s of meshing, eight times under the budget that had been blamed for it.'
   END,
   CASE
-    WHEN o.key IN ('hub_barrel_manufacturable','convergence_criterion','pocket_count','fatigue_amplitude_basis','part_thickness','part_mass','fatigue_safety_factor','governing_cycle','stop_tolerance') THEN 'CAD_Pipeline/REPRISE.md'
+    WHEN o.key IN ('hub_barrel_manufacturable','convergence_criterion','pocket_count','fatigue_amplitude_basis','part_thickness','part_mass','fatigue_safety_factor','governing_cycle','stop_tolerance','mesh_independence') THEN 'CAD_Pipeline/REPRISE.md'
     ELSE 'CLAUDE.md, protocols P1 to P7'
   END
 FROM belief o JOIN belief n ON o.key = n.key
