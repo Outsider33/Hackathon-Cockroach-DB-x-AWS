@@ -36,7 +36,7 @@
     flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text);
     padding: 12px 14px; border-radius: 8px; font-size: 15px; font-family: inherit;
   }
-  .ask input:focus { outline: none; border-color: var(--accent); }
+  .ask input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,255,255,.22); }
   .ask button {
     background: var(--accent); color: #0d0f12; border: 0; padding: 0 22px;
     border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;
@@ -186,6 +186,7 @@
 
 <div class="ask">
   <input id="q" autocomplete="off" spellcheck="false"
+         aria-label="Ask the memory a question"
          placeholder="what is blocking the FEA run">
   <button id="go">Ask</button>
 </div>
@@ -201,7 +202,7 @@
 </div>
 
 <div id="route"></div>
-<div id="out"></div>
+<div id="out" role="status" aria-live="polite"></div>
 
 <section class="tell">
   <h2>Now tell it something</h2>
@@ -215,7 +216,7 @@
   </p>
 
   <div class="ask">
-    <input id="claim" autocomplete="off" spellcheck="false"
+    <input id="claim" aria-label="Tell the memory something, as: subject is value because evidence" autocomplete="off" spellcheck="false"
            placeholder="hub barrel architecture is B because the mass study closed the 1.7 kg gap">
     <button id="propose">Propose</button>
   </div>
