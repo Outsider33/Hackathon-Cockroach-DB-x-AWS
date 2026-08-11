@@ -295,23 +295,42 @@ The organisers asked, and these cost real time:
 
 ```bash
 # A CockroachDB Basic cluster, free and no card, at cockroachlabs.cloud
-export CRDB_URL='postgresql://<user>:<password>@<host>:26257/agentmem?sslmode=verify-full'
+#
+# Note the sslrootcert=system. Without it, a machine that has never spoken to this
+# cluster fails on the FIRST command with
+#     root certificate file "~/.postgresql/root.crt" does not exist
+# CockroachDB Cloud presents a publicly trusted certificate, so the system trust
+# store is enough and verify-full still holds.
+# Do NOT drop to sslmode=require to make the message go away: that switches server
+# verification off, which is a real downgrade traded for a quieter terminal.
+export CRDB_URL='postgresql://<user>:<password>@<host>:26257/agentmem?sslmode=verify-full&sslrootcert=system'
 
 psql "$CRDB_URL" -f sql/schema.sql
 psql "$CRDB_URL" -f sql/seed.sql
 psql "$CRDB_URL" -f sql/migration_002_visitor_writes.sql
 psql "$CRDB_URL" -f sql/migration_003_belief_vectors.sql
+psql "$CRDB_URL" -f sql/migration_004_fixed_instrument.sql
 psql "$CRDB_URL" -f sql/queries.sql
 ```
 
 The order matters and the comments in `schema.sql` say why. Everything except the time travel query
 also works through the managed MCP server.
 
-The migration is not optional and was missing from this list until 2026-08-09. It adds the expiry
-column, the row-level TTL, the delete cascade and the `current_belief` view, and the API reads that
-view: a database built from `schema.sql` alone is one the deployed code cannot run against. Anyone
-who followed these instructions before that date got exactly that, which is a good argument for
-running your own install notes on an empty cluster at least once.
+`migration_004` only matters on a database built before 2026-08-11; a fresh install already gets its
+content from `seed.sql`, and running it anyway changes nothing because every statement is guarded.
+`docs/MIGRATION.md` says what it moves and why.
+
+Two lines of this list were wrong at some point, and both were found the same way: by running these
+instructions on a machine that had never seen this cluster.
+
+`migration_002` is not optional and was missing until 2026-08-09. It adds the expiry column, the
+row-level TTL, the delete cascade and the `current_belief` view, and the API reads that view: a
+database built from `schema.sql` alone is one the deployed code cannot run against. Anyone who
+followed these instructions before that date got exactly that.
+
+`sslrootcert=system` was missing until 2026-08-12, so anyone starting from a clean shell stopped at
+the very first command. Both defects share a shape worth naming: **install notes are only true on
+the machine that wrote them, until someone runs them somewhere else.**
 
 Then the corpus:
 
