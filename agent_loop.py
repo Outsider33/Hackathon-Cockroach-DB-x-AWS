@@ -79,7 +79,14 @@ def fetch(view, **params):
         print(f"\n  the memory is unreachable: {e}\n  endpoint: {API}", file=sys.stderr)
         sys.exit(EXIT_UNREACHABLE)
     try:
-        return json.loads(brut.decode("utf-8", "replace"))
+        objet = json.loads(brut.decode("utf-8", "replace"))
+        if not isinstance(objet, dict):
+            # Valid JSON, wrong shape. Found by the pathological-API bench on
+            # 2026-08-12: a body of `[1,2,3]` parses cleanly, and then every
+            # .get() below raises AttributeError. Well formed and wrong is a
+            # nastier failure than malformed, because it clears the first gate.
+            raise json.JSONDecodeError("expected a JSON object", "", 0)
+        return objet
     except (json.JSONDecodeError, UnicodeDecodeError):
         # A host answered, but not with our memory. Found by stress test on
         # 2026-08-12: pointing --api at any ordinary web server returns HTML and
