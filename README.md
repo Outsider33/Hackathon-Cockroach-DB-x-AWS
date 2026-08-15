@@ -39,7 +39,7 @@ Then each calculation declares what it needs, and how badly:
 
 ```
 computation            blocking gaps   verdict   cost
-fea_run                      2         BLOCKED   about 2 hours
+fea_run                      1         BLOCKED   about 2 hours
 bolt_check                   1         BLOCKED   seconds
 rod_end_boss_sizing          1         BLOCKED   minutes
 unsprung_mass_budget         1         BLOCKED   minutes
@@ -48,10 +48,18 @@ fatigue_check_welded         0         CAN RUN
 scrub_recompute              0         CAN RUN
 ```
 
-The two hour run is blocked on two things. One is an architecture decision nobody had written down
-as a blocker. The other is a measurement problem that was known, filed as a note, and left in
-place: mesh size was slaved to part thickness, so the instrument changed with the measurement, and
-two runs of the same commit returned 14.00 mm and 13.28 mm.
+The two hour run is blocked on one thing: an architecture decision nobody had written down as a
+blocker. It used to be blocked on two.
+
+The second one was a measurement problem, known, filed as a note and left in place: mesh size was
+slaved to part thickness, so the instrument changed with the measurement, and two runs of the same
+commit returned 14.00 mm and 13.28 mm. It was fixed on 2026-08-11 by holding the mesh constant, and
+two runs of the same commit then returned 12.74 mm and 6.69 kg to the hundredth. `mesh_independence`
+moved from UNDECIDABLE to ESTABLISHED, with those two runs as its evidence, and the gap count fell
+from two to one.
+
+That revision is in this database and is one of the seventeen below. An instrument that moves with
+the measurement is not an instrument, and this memory now says so with a date on it.
 
 The vehicle behind this is ambitious and touches a lot of disciplines at once. Nobody holds all of
 its variables in their head. That is the real job of this memory.
@@ -115,14 +123,12 @@ Between them sits the question an engineer actually asks on a Monday, and it nee
 ```
 what do I need to know to unblock the FEA run
 
-fea_run   BLOCKED · costs about 2 hours · 6 passages to read
+fea_run   BLOCKED · costs about 2 hours · 3 passages to read
   hub_barrel_architecture   BLOCKING   UNDECIDABLE
       REPRISE.md              similarity 0.58   "6. Reste ouvert, par ordre de rendement
                                                  1. Fût de moyeu ..."
       RECHERCHE_27-30.md      similarity 0.54   "2.1 SKF Hub Bearing Unit ..."
-  mesh_independence         BLOCKING   UNDECIDABLE
-      REPRISE.md              similarity 0.53   "3.4 La boucle de dimensionnement
-                                                 convergeait sur le MAUVAIS critère"
+      RECHERCHE_27-30.md      similarity 0.53   "5. TIER 1 bis, rotules coniques ...""
 ```
 
 One query. The join finds the gaps, then a `LATERAL` vector search reads the corpus **from where
@@ -174,8 +180,12 @@ Then the part that makes it worth watching. Beliefs are joined to the computatio
 so a sentence moves a two-hour job:
 
 ```
-fea_run     BLOCKED (2 blocking)  ->  BLOCKED (1 blocking)      costs about 2 hours
+fea_run     BLOCKED (1 blocking)  ->  CAN RUN (0 blocking)      costs about 2 hours
 ```
+
+That transition used to read `BLOCKED (2) -> BLOCKED (1)`, which was true until `mesh_independence`
+was established on 2026-08-11. One sentence now takes the last thing standing in the way of a two
+hour computation, which is a better demonstration and was not available a week ago.
 
 ### A public write endpoint that cannot damage the memory
 
@@ -207,7 +217,7 @@ the second is worse than one that refuses both.
 
 ## The data is real, and it is unflattering
 
-None of the seed data is invented. Fourteen revisions, all from dated logs, all moments where the
+None of the seed data is invented. Seventeen revisions, all from dated logs, all moments where the
 agent or I got something wrong and found out.
 
 | I believed | it turned out | what changed my mind |
@@ -229,7 +239,7 @@ tells you which of those I was unsure about.
 
 ## What this does not prove
 
-- The dataset is small on purpose. Fourteen revisions over seventeen beliefs, one subsystem of one
+- The dataset is small on purpose. Seventeen revisions over twenty-five held beliefs, one subsystem of one
   vehicle. It is real and traceable, it is not a benchmark, and nothing here demonstrates scale.
 - Vector search is a working integration, not a performance claim. Nothing was measured on latency
   or recall.
@@ -365,7 +375,7 @@ be handed to anyone.
 | Bedrock embeddings | written, blocked on account quota, remeasured across four regions on 2026-08-09 |
 | Agent loop that proposes, refuses, or writes a revision | done, six decision paths verified against the live cluster |
 | Where to read: structural gaps joined to the corpus | done, one query, threshold measured against the corpus average |
-| Tests | `python3 tests/test_agent.py`, 45 checks against the live cluster |
+| Tests | 59 checks across three benches, zero crashes: what a judge might type, what a broken API might return, and answers that are well-formed and wrong |
 | Public writes bounded by row-level TTL | done |
 | Demo application, S3 and Lambda behind an HTTP API | live |
 
